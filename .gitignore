@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Environments
+venv/
+.env
+*.env
+
+# Build artifacts
+*.zip
+*.dist-info/
+*.egg-info/
+
+# OS
+.DS_Store
+
+# Output
+out.*
+*.docx
+*.xlsx

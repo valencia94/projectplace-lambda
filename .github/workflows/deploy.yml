@@ -8,30 +8,35 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout code
+      - name: 📥 Checkout source code
         uses: actions/checkout@v3
 
-      - name: Configure AWS credentials
+      - name: 🔐 Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Login to Amazon ECR
+      - name: 🐳 Login to Amazon ECR
         run: |
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.ECR_REPO }}
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+          docker login --username AWS --password-stdin 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
 
-      - name: Build and push Docker image
+      - name: 🛠 Build and push Docker image to ECR
         run: |
-          docker build -t ${{ secrets.LAMBDA_FUNCTION_NAME }} .
-          docker tag ${{ secrets.LAMBDA_FUNCTION_NAME }}:latest ${{ secrets.ECR_REPO }}:latest
-          docker push ${{ secrets.ECR_REPO }}:latest
+          docker build -t ProjectPlaceDataExtractor .
+          docker tag ProjectPlaceDataExtractor:latest 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
+          docker push 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
 
-      - name: Update Lambda function
+      - name: 🚀 Update AWS Lambda function with latest image
         run: |
           aws lambda update-function-code \
-            --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
-            --image-uri ${{ secrets.ECR_REPO }}:latest \
-            --region ${{ secrets.AWS_REGION }}
+            --function-name ProjectPlaceDataExtractor \
+            --image-uri 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest \
+            --region us-east-2
+
+      - name: ✅ Deployment complete
+        run: echo "✅ Lambda deployment completed successfully!"

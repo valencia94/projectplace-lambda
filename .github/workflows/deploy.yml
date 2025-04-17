@@ -27,8 +27,8 @@ jobs:
 
       - name: 🛠 Build and push Docker image to ECR
         run: |
-          docker build -t ProjectPlaceDataExtractor .
-          docker tag ProjectPlaceDataExtractor:latest 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
+          docker build -t projectplaceextractor .
+          docker tag projectplaceextractor:latest 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
           docker push 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
 
       - name: 🚀 Update AWS Lambda function with latest image

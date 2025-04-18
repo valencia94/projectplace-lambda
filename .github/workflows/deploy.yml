@@ -1,4 +1,4 @@
-name: Deploy to Lambda via ECR
+name: Deploy to Lambda via ECR and Trigger Acta Generation
 
 on:
   push:
@@ -18,25 +18,62 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: us-east-2
 
       - name: 🐳 Login to Amazon ECR
         run: |
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+          aws ecr get-login-password --region us-east-2 | \
           docker login --username AWS --password-stdin 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
 
       - name: 🛠 Build and push Docker image to ECR
         run: |
-          docker build -t projectplaceextractor .
-          docker tag projectplaceextractor:latest 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
+          docker build -t projectplace-lambda .
+          docker tag projectplace-lambda:latest 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
           docker push 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
 
-      - name: 🚀 Update AWS Lambda function with latest image
+      - name: 🚀 Update Lambda function code
         run: |
           aws lambda update-function-code \
             --function-name ProjectPlaceDataExtractor \
             --image-uri 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest \
             --region us-east-2
 
-      - name: ✅ Deployment complete
-        run: echo "✅ Lambda deployment completed successfully!"
+      - name: 🧬 Merge environment variables
+        run: |
+          OLD_ENV_JSON=$(aws lambda get-function-configuration \
+            --function-name ProjectPlaceDataExtractor \
+            --region us-east-2 \
+            --query 'Environment.Variables' \
+            --output json)
+
+          NEW_ENV_JSON=$(echo "$OLD_ENV_JSON" | jq \
+            --arg secret "ProjectPlaceAPICredentials" \
+            --arg ddb "ProjectPlace_DataExtrator_landing_table_v3" \
+            --arg s3 "projectplace-dv-2025-x9a7b" \
+            '. + {
+              "SECRET_NAME": $secret,
+              "DYNAMODB_TABLE_NAME": $ddb,
+              "S3_BUCKET_NAME": $s3
+            }')
+
+          FINAL_ENV=$(jq -n --argjson vars "$NEW_ENV_JSON" '{Variables: $vars}')
+          echo "$FINAL_ENV" > tmp_env.json
+
+          aws lambda update-function-configuration \
+            --function-name ProjectPlaceDataExtractor \
+            --region us-east-2 \
+            --environment file://tmp_env.json
+
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor \
+            --region us-east-2
+
+      - name: 🔁 Invoke Lambda to Generate Actas
+        run: |
+          aws lambda invoke \
+            --function-name ProjectPlaceDataExtractor \
+            --region us-east-2 \
+            --payload '{}' \
+            out.json \
+            --cli-binary-format raw-in-base64-out
+          cat out.json

@@ -76,12 +76,14 @@ jobs:
             --function-name ProjectPlaceDataExtractor \
             --region us-east-2
 
-      - name: 🏁 Invoke Lambda to generate Actas
+      - name: 🏁 Invoke Lambda Asynchronously (non-blocking)
         run: |
           aws lambda invoke \
             --function-name ProjectPlaceDataExtractor \
             --region us-east-2 \
             --payload '{}' \
+            --invocation-type Event \
             out.json \
             --cli-binary-format raw-in-base64-out
-          cat out.json
+          echo "✅ Lambda invoked asynchronously. It will generate Actas in the background."
+

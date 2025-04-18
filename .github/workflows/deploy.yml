@@ -38,7 +38,13 @@ jobs:
             --image-uri 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest \
             --region us-east-2
 
-      - name: 🧬 Merge environment variables
+      - name: ⏳ Wait for Lambda code update to finish
+        run: |
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor \
+            --region us-east-2
+
+      - name: 🧬 Merge and apply environment variables
         run: |
           OLD_ENV_JSON=$(aws lambda get-function-configuration \
             --function-name ProjectPlaceDataExtractor \
@@ -64,11 +70,13 @@ jobs:
             --region us-east-2 \
             --environment file://tmp_env.json
 
+      - name: ⏳ Wait for environment update to finish
+        run: |
           aws lambda wait function-updated \
             --function-name ProjectPlaceDataExtractor \
             --region us-east-2
 
-      - name: 🔁 Invoke Lambda to Generate Actas
+      - name: 🏁 Invoke Lambda to generate Actas
         run: |
           aws lambda invoke \
             --function-name ProjectPlaceDataExtractor \

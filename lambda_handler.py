@@ -7,6 +7,7 @@ import ast
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import subprocess  # <-- For running LibreOffice headless
 
 import boto3
 from botocore.exceptions import ClientError
@@ -36,11 +37,11 @@ OUTPUT_EXCEL = "/tmp/Acta_de_Seguimiento.xlsx"
 DYNAMO_TABLE = os.getenv("DYNAMODB_TABLE_NAME", "ProjectPlace_DataExtrator_landing_table_v3")
 S3_BUCKET = os.getenv("S3_BUCKET_NAME", "projectplace-dv-2025-x9a7b")
 
-# Updated brand color from #2E86C1 -> #4AC795
+# BRAND_COLOR_HEADER changed from #2E86C1 → #4AC795
 BRAND_COLOR_HEADER = "4AC795"
 LIGHT_SHADE_2X2 = "FAFAFA"
 
-# Path to your local logo file inside the Docker container
+# Location for your logo image. Make sure it's included in your Docker image.
 LOGO_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "logo", "company_logo.png")
 
 
@@ -55,42 +56,43 @@ def lambda_handler(event, context):
     7) Relaxed date parse for FECHA => if parse fails, display raw comment
     8) Reordered columns for COMPROMISOS => ["COMPROMISO","RESPONSABLE","FECHA"]
     9) Store in Dynamo + Upload to S3
+    10) (OPTIONAL) Convert docx to PDF + upload.
     """
     logger.info("🚀 Starting final Acta generation with dynamic project list + leader logic.")
 
-    # 1) Load secrets from Secrets Manager
     secret_dict = load_secrets()
     client_id = secret_dict.get("PROJECTPLACE_ROBOT_CLIENT_ID", "")
     client_secret = secret_dict.get("PROJECTPLACE_ROBOT_CLIENT_SECRET", "")
     if not client_id or not client_secret:
         return {"statusCode": 500, "body": "Missing ProjectPlace credentials."}
 
-    # 2) Get Robot Token
+    # 1) Get Robot Token
     token = get_robot_access_token(client_id, client_secret)
     if not token:
         return {"statusCode": 500, "body": "Failed to get ProjectPlace token."}
 
-    # 3) Dynamically fetch active enterprise projects
+    # 2) Dynamically fetch *active* enterprise projects
     projects = get_all_account_projects(token, include_archived=False)
     if not projects:
         msg = "No active projects returned. Possibly no new or user has limited visibility."
         logger.warning(msg)
         return {"statusCode": 200, "body": msg}
 
-    # 4) Generate Excel
+    # 3) Generate Excel with tasks (cards) for each project + comments
     excel_path = generate_excel_report(token, projects)
     if not excel_path:
         return {"statusCode": 500, "body": "No Excel generated (no cards?)."}
 
-    # 5) Build DF from Excel, store in Dynamo
+    # 4) Build DataFrame from the Excel
     df = pd.read_excel(excel_path)
     if df.empty:
         logger.warning("Excel is empty—no tasks to process.")
         return {"statusCode": 200, "body": "No tasks found in Excel."}
 
+    # 5) Store in Dynamo
     store_in_dynamodb(df)
 
-    # 6) snippet_filter => parse columns, keep col_id=1
+    # 6) snippet => filter + parse
     df = snippet_filter(df)
     if df.empty:
         logger.warning("No tasks remain after snippet filter.")
@@ -100,15 +102,26 @@ def lambda_handler(event, context):
     grouped = df.groupby("project_id")
     doc_count = 0
     for pid, project_df in grouped:
+        # doc.save(...) is synchronous
         doc_path = build_acta_for_project(pid, project_df)
         if doc_path:
             doc_count += 1
-            # Upload doc => actas/Acta_{safe_proj}_{pid}.docx
+            # Upload doc
             first_row = project_df.iloc[0]
             p_name = str(first_row.get("project_name", "UnknownProject"))
             safe_proj = p_name.replace("/", "_").replace(" ", "_")
             s3_key_docx = f"actas/Acta_{safe_proj}_{pid}.docx"
             upload_file_to_s3(doc_path, s3_key_docx)
+
+            # (OPTIONAL) Convert to PDF and upload
+            try:
+                pdf_path = convert_docx_to_pdf(doc_path)
+                if pdf_path:
+                    # e.g. "actas/Acta_ProjectName_1234.pdf"
+                    s3_key_pdf = f"actas/Acta_{safe_proj}_{pid}.pdf"
+                    upload_file_to_s3(pdf_path, s3_key_pdf)
+            except Exception as exc:
+                logger.error(f"PDF conversion failed for doc {doc_path}: {exc}")
 
     # 8) Upload Excel as well
     s3_excel_key = "actas/Acta_de_Seguimiento.xlsx"
@@ -119,7 +132,6 @@ def lambda_handler(event, context):
         "excel_s3": f"s3://{S3_BUCKET}/{s3_excel_key}"
     }
     return {"statusCode": 200, "body": json.dumps(msg)}
-
 
 # ----------------------------------------------------------------------------
 # 1) SECRETS & OAUTH
@@ -194,9 +206,6 @@ def get_all_account_projects(token, include_archived=False):
 # 3) EXCEL GENERATION
 # ----------------------------------------------------------------------------
 def generate_excel_report(token, projects):
-    """
-    For each project in 'projects', fetch its cards + comments => write to Excel
-    """
     if not projects:
         logger.warning("No projects provided to generate_excel_report.")
         return None
@@ -217,18 +226,16 @@ def generate_excel_report(token, projects):
                 row = dict(c)
                 cid = c.get("id")
 
-                # fetch comments
                 cmts = fetch_comments_for_card(token, cid)
                 row["Comments"] = str(cmts)
 
-                # store project metadata
                 row["project_id"] = pid
                 row["project_name"] = p_name
                 row["archived"] = project_info.get("archived", False)
 
                 all_cards.append(row)
 
-            logger.info(f"Fetched {len(cards)} cards from '{p_name}' ({pid}).")
+            logger.info(f"Fetched {len(cards)} cards from project '{p_name}' ({pid}).")
 
         except Exception as e:
             logger.error(f"Error fetching cards for project {pid}: {str(e)}")
@@ -246,7 +253,7 @@ def fetch_comments_for_card(token, card_id):
     if not card_id:
         return []
     url = f"{PROJECTPLACE_API_URL}/1/cards/{card_id}/comments"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    headers = {"Authorization": f"Bearer {token}", "Accept":"application/json"}
     out = []
     try:
         r = requests.get(url, headers=headers)
@@ -284,10 +291,6 @@ def store_in_dynamodb(df):
 # 5) SNIPPET FILTER
 # ----------------------------------------------------------------------------
 def snippet_filter(df):
-    """
-    Keep col_id=1, parse last comment => 'comments_parsed'
-    Map 'creator_name', 'project_name', 'planlet_name', wbs
-    """
     if "column_id" in df.columns:
         df = df[df["column_id"] == 1].copy()
 
@@ -311,7 +314,6 @@ def snippet_filter(df):
         df["wbs_tuple"] = df["wbs_str"].apply(parse_wbs_id)
         df = df[df["wbs_tuple"].apply(len)>0].copy()
 
-    # exclude empty comments
     df = df[df["comments_parsed"].str.strip() != ""].copy()
     return df
 
@@ -346,14 +348,6 @@ def parse_wbs_id(wbs_str):
 # 6) BUILD ACTA => includes COMPROMISOS
 # ----------------------------------------------------------------------------
 def build_acta_for_project(pid, project_df):
-    """
-    Creates a docx for each project => includes:
-      - 2x2 table with FECHA + PROYECTO / NO. PROYECTO + LÍDER
-      - ASISTENCIA table
-      - Project status table
-      - COMPROMISOS table
-      - Saves doc => /tmp => returns path
-    """
     if project_df.empty:
         return None
 
@@ -368,25 +362,20 @@ def build_acta_for_project(pid, project_df):
     set_document_margins_and_orientation(doc)
     add_page_x_of_y_footer(doc)
 
-    # Header => Big title + optional logo
     add_top_header_table(doc, "ACTA DE SEGUIMIENTO", LOGO_IMAGE_PATH)
     doc.add_paragraph()
 
-    # 2x2 => FECHA / PROYECTO, NO.PROYECTO / LÍDER
     date_now = datetime.now().strftime("%m/%d/%Y")
     date_text = f"FECHA DEL ACTA: {date_now}"
     add_two_by_two_table(doc, date_text, project_name, str(pid), leader_name, shade_color=LIGHT_SHADE_2X2)
 
-    # ASISTENCIA table
     doc.add_paragraph()
     add_asistencia_table(doc, project_df)
 
-    # Horizontal line
     doc.add_paragraph()
     add_horizontal_rule(doc)
     doc.add_paragraph()
 
-    # ESTADO DEL PROYECTO
     add_section_header(doc, "ESTADO DEL PROYECTO Y COMENTARIOS")
     add_project_status_table(doc, project_df)
 
@@ -394,10 +383,9 @@ def build_acta_for_project(pid, project_df):
     add_horizontal_rule(doc)
     doc.add_paragraph()
 
-    # COMPROMISOS
     add_section_header(doc, "COMPROMISOS")
     add_commitments_table(doc, project_df)
-    doc.add_paragraph()  # ensures docx is fully closed
+    doc.add_paragraph()
 
     safe_proj_name = project_name.replace(" ", "_").replace("/", "_")
     doc_path = f"/tmp/Acta_{safe_proj_name}_{pid}.docx"
@@ -406,11 +394,6 @@ def build_acta_for_project(pid, project_df):
     return doc_path
 
 def add_project_status_table(doc, df):
-    """
-    Exclude board_name='COMPROMISOS'.
-    Exclude planlet_name in ["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"].
-    Columns => HITO (2.5"), ACTIVIDADES (2.5"), DESARROLLO (5.0")
-    """
     df = df[df.get("board_name","") != "COMPROMISOS"].copy()
     df = df[~df["planlet_name"].isin(["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"])].copy()
 
@@ -457,7 +440,6 @@ def add_project_status_table(doc, df):
             run.font.size = Pt(10)
             run.font.name = "Verdana"
 
-        # Row striping
         if row_idx % 2 == 0:
             for c in new_cells:
                 shade_elm = OxmlElement("w:shd")
@@ -465,11 +447,6 @@ def add_project_status_table(doc, df):
                 c._element.get_or_add_tcPr().append(shade_elm)
 
 def add_commitments_table(doc, df):
-    """
-    board_name='COMPROMISOS', col_id=1 => 3.0",4.0",3.0
-    columns => ["COMPROMISO","RESPONSABLE","FECHA"]
-    If date parse fails => raw comment
-    """
     commits = df[(df.get("board_name","") == "COMPROMISOS") & (df["column_id"] == 1)]
     if commits.empty:
         doc.add_paragraph("No commitments recorded.")
@@ -497,7 +474,6 @@ def add_commitments_table(doc, df):
         run.font.size = Pt(12)
         run.font.name = "Verdana"
         run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
-
         shading_elm = OxmlElement("w:shd")
         shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
         hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
@@ -523,7 +499,6 @@ def add_commitments_table(doc, df):
             run.font.size = Pt(10)
             run.font.name = "Verdana"
 
-        # row striping
         if row_idx % 2 == 0:
             for c in new_cells:
                 shade_elm = OxmlElement("w:shd")
@@ -532,10 +507,6 @@ def add_commitments_table(doc, df):
         row_idx += 1
 
 def parse_comment_for_date(comment_text):
-    """
-    Attempt dd/mm/yyyy and mm/dd/yyyy. If fail => ""
-    Then fallback to raw text
-    """
     c = comment_text.strip("[]'\" ")
     for fmt in ("%d/%m/%Y", "%m/%d/%Y"):
         try:
@@ -550,7 +521,8 @@ def parse_comment_for_date(comment_text):
 # ----------------------------------------------------------------------------
 def upload_file_to_s3(file_path, s3_key):
     """
-    S3 upload with correct ContentType + ContentDisposition => docx recognized by Word
+    Upload with ContentType and ContentDisposition so that direct S3
+    console downloads preserve the docx or xlsx properly.
     """
     s3 = boto3.client("s3", region_name=REGION)
     content_type = infer_content_type(s3_key)
@@ -572,11 +544,42 @@ def upload_file_to_s3(file_path, s3_key):
         logger.error(f"❌ S3 upload error: {str(e)}")
         return False
 
+def convert_docx_to_pdf(doc_path):
+    """
+    Uses LibreOffice in headless mode to convert a .docx -> .pdf
+    E.g. doc_path=/tmp/Acta_Project123.docx
+    Output => /tmp/Acta_Project123.pdf
+    """
+    if not os.path.exists(doc_path):
+        raise FileNotFoundError(f"Docx not found: {doc_path}")
+
+    output_dir = os.path.dirname(doc_path)
+    # LibreOffice command => `libreoffice --headless --convert-to pdf input.docx --outdir /tmp`
+    cmd = [
+        "libreoffice",
+        "--headless",
+        "--convert-to",
+        "pdf",
+        doc_path,
+        "--outdir",
+        output_dir
+    ]
+    subprocess.run(cmd, check=True)  # Raises CalledProcessError if fail
+
+    pdf_path = doc_path.replace(".docx", ".pdf")
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"PDF not found after conversion: {pdf_path}")
+
+    logger.info(f"PDF created => {pdf_path}")
+    return pdf_path
+
 def infer_content_type(s3_key):
     if s3_key.lower().endswith(".docx"):
         return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     elif s3_key.lower().endswith(".xlsx"):
         return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif s3_key.lower().endswith(".pdf"):
+        return "application/pdf"
     else:
         return "application/octet-stream"
 
@@ -624,7 +627,8 @@ def add_page_x_of_y_footer(doc):
 
 def add_top_header_table(doc, main_title, logo_path=None):
     """
-    2 columns => 5.0" each. Title left, optional logo right
+    2 columns => each 5.0"
+    Title => left col, optional logo => right col
     """
     table = doc.add_table(rows=1, cols=2)
     table.style = "Table Grid"
@@ -654,7 +658,7 @@ def add_top_header_table(doc, main_title, logo_path=None):
 
 def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, shade_color=None):
     """
-    2x2 => row0 col0=FECHA, row0 col1=PROYECTO, row1 col0=NO.PROYECTO, row1 col1=LIDER
+    2x2 => (FECHA DEL ACTA, PROYECTO) / (NO. PROYECTO, LÍDER DEL PROYECTO)
     """
     table = doc.add_table(rows=2, cols=2)
     table.style = "Table Grid"
@@ -663,7 +667,7 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
     table.columns[0].width = Inches(5.0)
     table.columns[1].width = Inches(5.0)
 
-    # row0 col0 => FECHA
+    # row0 col0 => FECHA DEL ACTA
     c_0_0 = table.cell(0,0)
     r_0_0 = c_0_0.paragraphs[0].add_run(date_text)
     r_0_0.font.size = Pt(12)
@@ -679,7 +683,7 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
     if shade_color:
         shade_cell(c_0_1, shade_color)
 
-    # row1 col0 => NO.PROYECTO
+    # row1 col0 => NO. PROYECTO
     c_1_0 = table.cell(1,0)
     r_1_0 = c_1_0.paragraphs[0].add_run(f"NO. DE PROYECTO  {project_id}")
     r_1_0.font.size = Pt(12)
@@ -687,7 +691,7 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
     if shade_color:
         shade_cell(c_1_0, shade_color)
 
-    # row1 col1 => LÍDER
+    # row1 col1 => LÍDER DEL PROYECTO
     c_1_1 = table.cell(1,1)
     r_1_1 = c_1_1.paragraphs[0].add_run(f"LÍDER DEL PROYECTO  {leader_name}")
     r_1_1.font.size = Pt(12)
@@ -697,8 +701,9 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
 
 def add_asistencia_table(doc, df):
     """
-    2x2 => row0 => (ASISTENCIA, ASISTENCIA IKUSI),
-             row1 => data from planlet_name=ASISTENCIA, planlet_name=ASISTENCIA CLIENTE
+    2x2 => row0 col0 => "ASISTENCIA", row0 col1 => "ASISTENCIA IKUSI"
+            row1 col0 => planlet_name="ASISTENCIA"
+            row1 col1 => planlet_name="ASISTENCIA CLIENTE"
     """
     table = doc.add_table(rows=2, cols=2)
     table.style = "Table Grid"
@@ -709,8 +714,6 @@ def add_asistencia_table(doc, df):
     # Headers => row 0
     hdr_row = table.rows[0]
     hdr_cells = hdr_row.cells
-
-    # col0 => "ASISTENCIA"
     hdr_cells[0].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     hdr_cells[0].text = "ASISTENCIA"
     run0 = hdr_cells[0].paragraphs[0].runs[0]
@@ -722,7 +725,6 @@ def add_asistencia_table(doc, df):
     shading_elm0.set(qn("w:fill"), BRAND_COLOR_HEADER)
     hdr_cells[0]._element.get_or_add_tcPr().append(shading_elm0)
 
-    # col1 => "ASISTENCIA IKUSI"
     hdr_cells[1].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     hdr_cells[1].text = "ASISTENCIA IKUSI"
     run1 = hdr_cells[1].paragraphs[0].runs[0]
@@ -736,16 +738,19 @@ def add_asistencia_table(doc, df):
 
     # row 1 => data from planlet_name="ASISTENCIA" & "ASISTENCIA CLIENTE"
     row_asist = df[(df["planlet_name"]=="ASISTENCIA") & (df["column_id"]==1)]
-    text_asist = str(row_asist.iloc[0].get("comments_parsed","")) if not row_asist.empty else ""
+    text_asist = ""
+    if not row_asist.empty:
+        text_asist = str(row_asist.iloc[0].get("comments_parsed",""))
 
     row_asist_cliente = df[(df["planlet_name"]=="ASISTENCIA CLIENTE") & (df["column_id"]==1)]
-    text_asist_cliente = str(row_asist_cliente.iloc[0].get("comments_parsed","")) if not row_asist_cliente.empty else ""
+    text_asist_cliente = ""
+    if not row_asist_cliente.empty:
+        text_asist_cliente = str(row_asist_cliente.iloc[0].get("comments_parsed",""))
 
     data_row = table.rows[1].cells
     data_row[0].text = text_asist
     data_row[1].text = text_asist_cliente
 
-    # Style => Verdana 10pt
     for col_idx in range(2):
         p = data_row[col_idx].paragraphs[0]
         p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
@@ -763,9 +768,6 @@ def add_section_header(doc, header_text):
     doc.add_paragraph()
 
 def add_horizontal_rule(doc):
-    """
-    A simple horizontal line
-    """
     line_para = doc.add_paragraph()
     line_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     run = line_para.add_run("_______________________________________________________________")

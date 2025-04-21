@@ -1,0 +1,86 @@
+name: Convert Latest Docx to PDF
+
+on:
+  workflow_dispatch: {}  # So you can manually run this from GitHub Actions
+
+jobs:
+  convert-latest-docx:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v3
+
+      - name: 🔐 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2   # or whichever region your bucket is in
+
+      - name: 🏗 Install LibreOffice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice
+
+      - name: 🔎 Find the latest docx in S3
+        id: find_latest
+        run: |
+          # This command lists all objects under s3://BUCKET/actas/
+          # Then sorts them by LastModified descending, picks the first, and extracts the Key
+          LATEST_DOC=$(aws s3api list-objects-v2 \
+            --bucket projectplace-dv-2025-x9a7b \
+            --prefix "actas/" \
+            --query "reverse(sort_by(Contents, &LastModified))[0].Key" \
+            --output text)
+
+          echo "Latest doc is: $LATEST_DOC"
+
+          # Store it in GitHub Actions output for next steps
+          echo "LATEST_DOC=$LATEST_DOC" >> $GITHUB_OUTPUT
+
+      - name: 📂 Download that one doc
+        run: |
+          # We'll read the value from the previous step's outputs
+          DOCX_NAME=${{ steps.find_latest.outputs.LATEST_DOC }}
+          if [ "$DOCX_NAME" = "None" ] || [ -z "$DOCX_NAME" ]; then
+            echo "No docx found in actas/"
+            exit 1
+          fi
+
+          # Just the base filename
+          BASE_DOC=$(basename "$DOCX_NAME")
+
+          # Download it locally
+          echo "Downloading s3://projectplace-dv-2025-x9a7b/$DOCX_NAME"
+          aws s3 cp "s3://projectplace-dv-2025-x9a7b/$DOCX_NAME" "$BASE_DOC"
+
+      - name: 🖨 Convert docx to pdf
+        run: |
+          # We'll convert the file we just downloaded
+          BASE_DOC=$(ls *.docx)
+          echo "Converting $BASE_DOC to PDF..."
+
+          # Use LibreOffice in headless mode
+          libreoffice --headless --convert-to pdf "$BASE_DOC"
+
+          # LibreOffice will generate e.g. "Acta_Foo.pdf" next to the .docx
+          ls -lah
+
+      - name: 🚀 Upload PDF back to S3
+        run: |
+          PDF_FILE=$(ls *.pdf)
+          echo "We have PDF: $PDF_FILE"
+
+          # We'll keep the same prefix 'actas/' and replace .docx with .pdf
+          # e.g., "Acta_foo.docx" => "Acta_foo.pdf"
+          # or you can just keep the same name in S3 but .pdf extension
+          
+          DOCX_NAME=${{ steps.find_latest.outputs.LATEST_DOC }}
+          BASE_DOC=$(basename "$DOCX_NAME")
+          PDF_TARGET="${DOCX_NAME%.docx}.pdf"
+
+          echo "Re-uploading $PDF_FILE => s3://projectplace-dv-2025-x9a7b/$PDF_TARGET"
+          aws s3 cp "$PDF_FILE" "s3://projectplace-dv-2025-x9a7b/$PDF_TARGET" \
+            --content-type "application/pdf" \
+            --content-disposition "attachment; filename=\"$(basename "$PDF_FILE")\""

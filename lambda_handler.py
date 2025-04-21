@@ -29,15 +29,18 @@ SECRET_NAME = "ProjectPlaceAPICredentials"
 REGION = "us-east-2"
 PROJECTPLACE_API_URL = "https://api.projectplace.com"
 
+# Files & Paths
 OUTPUT_EXCEL = "/tmp/Acta_de_Seguimiento.xlsx"
+
+# Environment Variables
 DYNAMO_TABLE = os.getenv("DYNAMODB_TABLE_NAME", "ProjectPlace_DataExtrator_landing_table_v3")
 S3_BUCKET = os.getenv("S3_BUCKET_NAME", "projectplace-dv-2025-x9a7b")
 
-# 4) Updated brand header color to #4AC795
+# BRAND_COLOR_HEADER changed from #2E86C1 → #4AC795
 BRAND_COLOR_HEADER = "4AC795"
 LIGHT_SHADE_2X2 = "FAFAFA"
 
-# Ensure we check if a local logo file exists:
+# Location for your logo image. Make sure it's included in your Docker image.
 LOGO_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "logo", "company_logo.png")
 
 
@@ -73,12 +76,12 @@ def lambda_handler(event, context):
         logger.warning(msg)
         return {"statusCode": 200, "body": msg}
 
-    # 3) Generate Excel with tasks for all dynamic project IDs
+    # 3) Generate Excel with tasks (cards) for each project + comments
     excel_path = generate_excel_report(token, projects)
     if not excel_path:
         return {"statusCode": 500, "body": "No Excel generated (no cards?)."}
 
-    # 4) Build DataFrame from Excel
+    # 4) Build DataFrame from the Excel
     df = pd.read_excel(excel_path)
     if df.empty:
         logger.warning("Excel is empty—no tasks to process.")
@@ -97,7 +100,7 @@ def lambda_handler(event, context):
     grouped = df.groupby("project_id")
     doc_count = 0
     for pid, project_df in grouped:
-        # The .save(...) call is synchronous, so no race condition with the S3 upload below
+        # doc.save(...) is synchronous
         doc_path = build_acta_for_project(pid, project_df)
         if doc_path:
             doc_count += 1
@@ -117,6 +120,7 @@ def lambda_handler(event, context):
         "excel_s3": f"s3://{S3_BUCKET}/{s3_excel_key}"
     }
     return {"statusCode": 200, "body": json.dumps(msg)}
+
 
 # ----------------------------------------------------------------------------
 # 1) SECRETS & OAUTH
@@ -282,7 +286,7 @@ def store_in_dynamodb(df):
     logger.info(f"Inserted {inserted} items into {DYNAMO_TABLE}")
 
 # ----------------------------------------------------------------------------
-# 5) snippet_filter => col_id=1, parse 'creator', wbs, last comment
+# 5) SNIPPET FILTER
 # ----------------------------------------------------------------------------
 def snippet_filter(df):
     if "column_id" in df.columns:
@@ -352,16 +356,14 @@ def build_acta_for_project(pid, project_df):
 
     first_row = project_df.iloc[0]
     project_name = str(first_row.get("project_name","Unknown Project"))
-    # Leader = "creator_name"
     leader_name = str(first_row.get("creator_name","N/A"))
 
     doc = Document()
     set_document_margins_and_orientation(doc)
     add_page_x_of_y_footer(doc)
 
-    # The top header with big title & optional logo
+    # Top header (title + optional logo)
     add_top_header_table(doc, "ACTA DE SEGUIMIENTO", LOGO_IMAGE_PATH)
-
     doc.add_paragraph()
 
     # 2x2 => FECHA, PROYECTO / NO. PROYECTO, LÍDER DEL PROYECTO
@@ -369,8 +371,8 @@ def build_acta_for_project(pid, project_df):
     date_text = f"FECHA DEL ACTA: {date_now}"
     add_two_by_two_table(doc, date_text, project_name, str(pid), leader_name, shade_color=LIGHT_SHADE_2X2)
 
-    # Insert the new “ASISTENCIA” table
-    doc.add_paragraph()  # a blank paragraph for spacing
+    # ASISTENCIA table
+    doc.add_paragraph()  # spacing
     add_asistencia_table(doc, project_df)
 
     # Horizontal line
@@ -378,6 +380,7 @@ def build_acta_for_project(pid, project_df):
     add_horizontal_rule(doc)
     doc.add_paragraph()
 
+    # ESTADO DEL PROYECTO
     add_section_header(doc, "ESTADO DEL PROYECTO Y COMENTARIOS")
     add_project_status_table(doc, project_df)
 
@@ -385,16 +388,17 @@ def build_acta_for_project(pid, project_df):
     add_horizontal_rule(doc)
     doc.add_paragraph()
 
+    # COMPROMISOS
     add_section_header(doc, "COMPROMISOS")
     add_commitments_table(doc, project_df)
 
-    # Ensure final paragraph closure for docx
+    # Extra paragraph ensures docx is fully formed
     doc.add_paragraph()
 
     safe_proj_name = project_name.replace(" ", "_").replace("/", "_")
     doc_path = f"/tmp/Acta_{safe_proj_name}_{pid}.docx"
 
-    # 2) Word Save Flow fix: .save() is synchronous and completes before the next step
+    # Save => ensures no race condition
     doc.save(doc_path)
     logger.info(f"Created doc for project {pid}: {doc_path}")
     return doc_path
@@ -403,9 +407,9 @@ def build_acta_for_project(pid, project_df):
 def add_project_status_table(doc, df):
     """
     Exclude board_name='COMPROMISOS'. columns => 2.5",2.5",5.0
+    Also exclude planlet_name in ["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"].
     """
     df = df[df.get("board_name","") != "COMPROMISOS"].copy()
-    # Exclude planlet_name in ["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"]
     df = df[~df["planlet_name"].isin(["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"])].copy()
 
     table_data = []
@@ -437,8 +441,9 @@ def add_project_status_table(doc, df):
         run.font.size = Pt(12)
         run.font.name = "Verdana"
         run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
+
         shading_elm = OxmlElement("w:shd")
-        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)  # Updated color
+        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
         hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
 
     for row_idx, row_data in enumerate(table_data):
@@ -492,14 +497,13 @@ def add_commitments_table(doc, df):
         run.font.name = "Verdana"
         run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
         shading_elm = OxmlElement("w:shd")
-        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)  # Updated color
+        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
         hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
 
     row_idx = 0
     for _, row in commits.iterrows():
         new_cells = table.add_row().cells
 
-        # Reorder => [comp, responsible, date_str]
         comp = str(row.get("title",""))
         responsible = str(row.get("planlet_name",""))
         last_comment = str(row.get("comments_parsed",""))
@@ -544,11 +548,9 @@ def parse_comment_for_date(comment_text):
 # ----------------------------------------------------------------------------
 # S3 & HELPER FUNCS
 # ----------------------------------------------------------------------------
-
 def upload_file_to_s3(file_path, s3_key):
     """
-    Added ContentType to prevent file corruption.
-    We infer content type by file extension (docx / xlsx).
+    Fix #1: Added ContentType to prevent corruption
     """
     s3 = boto3.client("s3", region_name=REGION)
     content_type = infer_content_type(s3_key)
@@ -557,7 +559,7 @@ def upload_file_to_s3(file_path, s3_key):
             file_path,
             S3_BUCKET,
             s3_key,
-            ExtraArgs={"ContentType": content_type}  # Fix #1: Add ContentType
+            ExtraArgs={"ContentType": content_type}
         )
         logger.info(f"✅ Uploaded {file_path} => s3://{S3_BUCKET}/{s3_key}")
         return True
@@ -573,28 +575,6 @@ def infer_content_type(s3_key):
     else:
         return "application/octet-stream"
 
-
-def add_section_header(doc, header_text):
-    p = doc.add_paragraph()
-    p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    run_h = p.add_run(header_text)
-    run_h.bold = True
-    run_h.font.size = Pt(18)
-    run_h.font.name = "Verdana"
-    doc.add_paragraph()
-
-def add_horizontal_rule(doc):
-    """Thicker, centered line."""
-    line_para = doc.add_paragraph()
-    line_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    run = line_para.add_run("_______________________________________________________________")
-    run.font.size = Pt(12)
-
-def shade_cell(cell, color):
-    """Shades cell background => color."""
-    shade_elm = OxmlElement("w:shd")
-    shade_elm.set(qn("w:fill"), color)
-    cell._element.get_or_add_tcPr().append(shade_elm)
 
 def set_document_margins_and_orientation(doc):
     section = doc.sections[0]
@@ -640,7 +620,7 @@ def add_page_x_of_y_footer(doc):
 
 def add_top_header_table(doc, main_title, logo_path=None):
     """
-    2 columns => each ~5.0"
+    2 columns => each 5.0"
     Title => left col, optional logo => right col
     """
     table = doc.add_table(rows=1, cols=2)
@@ -661,7 +641,7 @@ def add_top_header_table(doc, main_title, logo_path=None):
     p_right = right_cell.paragraphs[0]
     p_right.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
 
-    # 3) Logo existence check
+    # Existence check for logo
     if logo_path and os.path.exists(logo_path):
         run_logo = p_right.add_run()
         run_logo.add_picture(logo_path, width=Inches(3.0))
@@ -672,16 +652,16 @@ def add_top_header_table(doc, main_title, logo_path=None):
 
 def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, shade_color=None):
     """
-    2x2 => (FECHA DEL ACTA, PROYECTO), (NO. PROYECTO, LÍDER DEL PROYECTO)
-    Each col => ~5.0" wide
+    2x2 => (FECHA DEL ACTA, PROYECTO) / (NO. PROYECTO, LÍDER DEL PROYECTO)
     """
     table = doc.add_table(rows=2, cols=2)
     table.style = "Table Grid"
     table.autofit = False
+
     table.columns[0].width = Inches(5.0)
     table.columns[1].width = Inches(5.0)
 
-    # row0 col0 => FECHA DEL ACTA
+    # row0 col0 => FECHA
     c_0_0 = table.cell(0,0)
     r_0_0 = c_0_0.paragraphs[0].add_run(date_text)
     r_0_0.font.size = Pt(12)
@@ -689,7 +669,7 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
     if shade_color:
         shade_cell(c_0_0, shade_color)
 
-    # row0 col1 => PROYECTO ...
+    # row0 col1 => PROYECTO
     c_0_1 = table.cell(0,1)
     r_0_1 = c_0_1.paragraphs[0].add_run(f"PROYECTO  {project_name}")
     r_0_1.font.size = Pt(12)
@@ -705,14 +685,13 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
     if shade_color:
         shade_cell(c_1_0, shade_color)
 
-    # row1 col1 => LÍDER DEL PROYECTO
+    # row1 col1 => LÍDER
     c_1_1 = table.cell(1,1)
     r_1_1 = c_1_1.paragraphs[0].add_run(f"LÍDER DEL PROYECTO  {leader_name}")
     r_1_1.font.size = Pt(12)
     r_1_1.bold = True
     if shade_color:
         shade_cell(c_1_1, shade_color)
-
 
 def add_asistencia_table(doc, df):
     """
@@ -732,7 +711,6 @@ def add_asistencia_table(doc, df):
     hdr_row = table.rows[0]
     hdr_cells = hdr_row.cells
 
-    # col0 => "ASISTENCIA"
     hdr_cells[0].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     hdr_cells[0].text = "ASISTENCIA"
     run0 = hdr_cells[0].paragraphs[0].runs[0]
@@ -740,20 +718,21 @@ def add_asistencia_table(doc, df):
     run0.font.size = Pt(12)
     run0.font.name = "Verdana"
     run0.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
+
     shading_elm0 = OxmlElement("w:shd")
-    shading_elm0.set(qn("w:fill"), BRAND_COLOR_HEADER)  # Updated color
+    shading_elm0.set(qn("w:fill"), BRAND_COLOR_HEADER)
     hdr_cells[0]._element.get_or_add_tcPr().append(shading_elm0)
 
-    # col1 => "ASISTENCIA IKUSI"
     hdr_cells[1].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    hdr_cells[1].text = "ASISTENCIA IKUSI"
+    hdr_cells[1].text = "ASISTENCIA IKUSI"  # or "ASISTENCIA CLIENTE" if needed
     run1 = hdr_cells[1].paragraphs[0].runs[0]
     run1.bold = True
     run1.font.size = Pt(12)
     run1.font.name = "Verdana"
     run1.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
+
     shading_elm1 = OxmlElement("w:shd")
-    shading_elm1.set(qn("w:fill"), BRAND_COLOR_HEADER)  # Updated color
+    shading_elm1.set(qn("w:fill"), BRAND_COLOR_HEADER)
     hdr_cells[1]._element.get_or_add_tcPr().append(shading_elm1)
 
     # Row1 => data
@@ -778,3 +757,29 @@ def add_asistencia_table(doc, df):
         run_data = p.runs[0]
         run_data.font.size = Pt(10)
         run_data.font.name = "Verdana"
+
+def add_section_header(doc, header_text):
+    p = doc.add_paragraph()
+    p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+    run_h = p.add_run(header_text)
+    run_h.bold = True
+    run_h.font.size = Pt(18)
+    run_h.font.name = "Verdana"
+    doc.add_paragraph()
+
+def add_horizontal_rule(doc):
+    """
+    A simple horizontal line
+    """
+    line_para = doc.add_paragraph()
+    line_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+    run = line_para.add_run("_______________________________________________________________")
+    run.font.size = Pt(12)
+
+def shade_cell(cell, color):
+    """
+    Shades cell background => color
+    """
+    shade_elm = OxmlElement("w:shd")
+    shade_elm.set(qn("w:fill"), color)
+    cell._element.get_or_add_tcPr().append(shade_elm)

@@ -1,11 +1,12 @@
 name: Convert Latest Docx to PDF
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}  # Allows manual trigger in GitHub Actions
 
 jobs:
   convert-latest-docx:
     runs-on: ubuntu-latest
+    
     steps:
       - name: 📥 Checkout source
         uses: actions/checkout@v3
@@ -22,10 +23,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libreoffice
 
-      - name: 🔎 Find the latest docx in S3
+      - name: 🔎 Find the latest .docx in S3
         id: find_latest
         run: |
-          # Only returns .docx files
+          # This list-objects query returns only items that end with ".docx"
+          # Then sorts them by LastModified, reversed, and picks the first (the newest)
           LATEST_DOC=$(aws s3api list-objects-v2 \
             --bucket projectplace-dv-2025-x9a7b \
             --prefix "actas/" \
@@ -33,20 +35,22 @@ jobs:
             --output text)
 
           if [ "$LATEST_DOC" = "None" ] || [ -z "$LATEST_DOC" ]; then
-            echo "No .docx found in actas/ prefix!"
+            echo "No .docx file found in s3://projectplace-dv-2025-x9a7b/actas/"
             exit 1
           fi
 
           echo "LATEST_DOC=$LATEST_DOC"
+          # Expose the doc key as an output for later steps
           echo "LATEST_DOC=$LATEST_DOC" >> $GITHUB_OUTPUT
 
       - name: 📂 Download the newly created docx
         run: |
           DOCX_NAME=${{ steps.find_latest.outputs.LATEST_DOC }}
           echo "Downloading s3://projectplace-dv-2025-x9a7b/$DOCX_NAME"
-          
+
           LOCAL_DOCX=$(basename "$DOCX_NAME")
           aws s3 cp "s3://projectplace-dv-2025-x9a7b/$DOCX_NAME" "$LOCAL_DOCX"
+
           echo "Verifying it downloaded..."
           ls -l
 
@@ -54,15 +58,19 @@ jobs:
         run: |
           DOCX_FILE=$(ls *.docx)
           echo "Converting $DOCX_FILE to PDF..."
+
           libreoffice --headless --convert-to pdf "$DOCX_FILE"
+
+          echo "Files after conversion:"
           ls -l
 
       - name: 🚀 Upload PDF back to S3
         run: |
           PDF_FILE=$(ls *.pdf)
-          echo "We have PDF: $PDF_FILE"
+          echo "Found PDF: $PDF_FILE"
 
           DOCX_NAME=${{ steps.find_latest.outputs.LATEST_DOC }}
+          # Replacing .docx with .pdf in the same prefix
           PDF_TARGET="${DOCX_NAME%.docx}.pdf"
 
           echo "Re-uploading $PDF_FILE => s3://projectplace-dv-2025-x9a7b/$PDF_TARGET"
@@ -70,4 +78,4 @@ jobs:
             --content-type "application/pdf" \
             --content-disposition "attachment; filename=\"$(basename "$PDF_FILE")\""
 
-          echo "✅ Done! The docx + pdf are in actas/."
+          echo "✅ Done! The docx + pdf are both in s3://projectplace-dv-2025-x9a7b/actas/."

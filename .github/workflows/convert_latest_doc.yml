@@ -1,51 +1,65 @@
 name: Convert All Docx to PDF
 
 on:
-  workflow_dispatch: {}  # so you can run it manually
+  workflow_dispatch: {}  # Allows you to manually run this workflow in GitHub Actions
 
 jobs:
-  convert-all-docs:
+  convert-docs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Checkout source
+      - name: 📥 Checkout Source
         uses: actions/checkout@v3
 
-      - name: 🔐 Configure AWS credentials
+      - name: 🔐 Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-2  # or your region
+          aws-region: us-east-2  # The region your bucket is in
 
       - name: 🏗 Install LibreOffice
         run: |
           sudo apt-get update
           sudo apt-get install -y libreoffice
 
-      - name: 📥 Download all docx from S3
+      - name: 📥 Download ALL .docx from S3 (Bucket: projectplace-dv-2025-x9a7b)
         run: |
-          # We'll sync only *.docx from s3://<bucket>/actas to a local folder
           mkdir -p actas
+          echo "Syncing *.docx from s3://projectplace-dv-2025-x9a7b/actas to local 'actas' folder..."
           aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas --exclude "*" --include "*.docx"
+
+          echo "List of downloaded files in 'actas' folder now:"
           ls -l actas
 
-      - name: 🖨 Convert .docx to .pdf
+          # Optional: Fail the job if no .docx files exist
+          COUNT_DOCX=$(ls -1 actas/*.docx 2>/dev/null | wc -l)
+          if [ "$COUNT_DOCX" -eq 0 ]; then
+            echo "No .docx files found in 'actas/' prefix!"
+            exit 1
+          fi
+
+      - name: 🖨 Convert .docx => .pdf
         run: |
           cd actas
-          # For each .docx, convert to .pdf in the same directory
-          for f in *.docx; do
-            echo "Converting $f to PDF..."
-            libreoffice --headless --convert-to pdf "$f" 
-          done
+          echo "Now in $(pwd). Files before convert:"
           ls -l
 
-      - name: 🚀 Upload PDFs back to S3
+          for f in *.docx; do
+            echo "Converting '$f' to PDF..."
+            libreoffice --headless --convert-to pdf "$f"
+          done
+
+          echo "Conversion done. Checking final files:"
+          ls -l
+
+      - name: 🚀 Upload .pdf back to S3 (Bucket: projectplace-dv-2025-x9a7b)
         run: |
-          # Now we sync all *.pdf from our local "actas/" back to "s3://.../actas"
+          echo "Syncing any newly created .pdf in 'actas/' to s3://projectplace-dv-2025-x9a7b/actas ..."
           aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
             --exclude "*" \
             --include "*.pdf" \
             --content-type "application/pdf" \
             --content-disposition "attachment"
-          echo "Done uploading PDF!"
+
+          echo "✅ PDF upload complete!"

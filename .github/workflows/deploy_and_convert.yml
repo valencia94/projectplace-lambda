@@ -1,0 +1,62 @@
+name: Deploy and Convert
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-lambda:
+    runs-on: ubuntu-latest
+    steps:
+      # (Your existing deploy.yml steps go here)
+      - name: 📥 Checkout source
+        uses: actions/checkout@v3
+
+      - name: 🔐 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - name: 🐳 Login to Amazon ECR
+        # ...
+      - name: 🛠 Build and push Docker image to ECR
+        # ...
+      - name: 🚀 Update Lambda function code
+        # ...
+      - name: ⏳ Wait for Lambda code update to finish
+        # ...
+      # etc. (all your steps from deploy.yml)...
+
+  convert-docx:
+    runs-on: ubuntu-latest
+    needs: [deploy-lambda]  # <-- This means "wait until deploy-lambda job finishes"
+    steps:
+      - name: 📥 Checkout Source
+        uses: actions/checkout@v3
+
+      - name: 🔐 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - name: 🏗 Install LibreOffice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice
+
+      - name: 📥 Download all .docx from S3
+        run: |
+          # (Steps from your convert_all_docx.yml)
+          aws s3 sync ...
+          # ...
+      - name: 🖨 Convert .docx => .pdf
+        run: |
+          # ...
+      - name: 🚀 Upload PDF back to S3
+        run: |
+          # ...

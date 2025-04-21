@@ -1,0 +1,66 @@
+name: Convert All Docx to PDF
+
+on:
+  workflow_dispatch: {}  # So you can manually run it in GitHub Actions
+
+jobs:
+  convert-docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout Source
+        uses: actions/checkout@v3
+
+      - name: 🔐 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2  # or your region
+
+      - name: 🏗 Install LibreOffice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice
+
+      - name: 📥 Download ALL .docx from S3
+        run: |
+          mkdir -p actas
+          echo "Syncing *.docx from s3://projectplace-dv-2025-x9a7b/actas to local 'actas' folder..."
+          # Only docx files are downloaded
+          aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas --exclude "*" --include "*.docx"
+
+          echo "List of downloaded files in 'actas':"
+          ls -l actas
+
+          # Optional: fail if no docx found
+          COUNT_DOCX=$(ls -1 actas/*.docx 2>/dev/null | wc -l)
+          if [ "$COUNT_DOCX" -eq 0 ]; then
+            echo "No .docx files found in s3://projectplace-dv-2025-x9a7b/actas!"
+            exit 1
+          fi
+
+      - name: 🖨 Convert all .docx to .pdf
+        run: |
+          cd actas
+          echo "Now in $(pwd). Listing before convert:"
+          ls -l
+
+          for f in *.docx; do
+            echo "Converting '$f' to PDF..."
+            libreoffice --headless --convert-to pdf "$f"
+          done
+
+          echo "Conversion done. Checking final files:"
+          ls -l
+
+      - name: 🚀 Upload .pdf back to S3
+        run: |
+          echo "Syncing newly created .pdf in 'actas/' to s3://projectplace-dv-2025-x9a7b/actas ..."
+          aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
+            --exclude "*" \
+            --include "*.pdf" \
+            --content-type "application/pdf" \
+            --content-disposition "attachment"
+
+          echo "✅ PDF upload complete!"

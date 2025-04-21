@@ -1,16 +1,19 @@
 FROM public.ecr.aws/lambda/python:3.10
 
-# 1) Install LibreOffice (headless)
-RUN yum install -y libreoffice
+# 1) Enable EPEL and clean metadata
+RUN amazon-linux-extras enable epel && \
+    yum clean metadata
 
-# 2) Copy and install dependencies
+# 2) Install epel-release and attempt installing LibreOffice headless
+RUN yum install -y epel-release && \
+    yum install -y libreoffice-headless
+
+# 3) Copy and install dependencies
 COPY requirements.txt .
 RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
 
-# 3) Copy the main Python code (lambda_handler.py)
+# 4) Copy your Lambda code
 COPY lambda_handler.py ./
-
-# 4) Copy the 'logo' folder containing your company_logo.png
 COPY logo/ ./logo/
 
 # 5) Lambda entry point

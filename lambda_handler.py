@@ -36,11 +36,11 @@ OUTPUT_EXCEL = "/tmp/Acta_de_Seguimiento.xlsx"
 DYNAMO_TABLE = os.getenv("DYNAMODB_TABLE_NAME", "ProjectPlace_DataExtrator_landing_table_v3")
 S3_BUCKET = os.getenv("S3_BUCKET_NAME", "projectplace-dv-2025-x9a7b")
 
-# BRAND_COLOR_HEADER changed from #2E86C1 → #4AC795
+# Updated brand color from #2E86C1 -> #4AC795
 BRAND_COLOR_HEADER = "4AC795"
 LIGHT_SHADE_2X2 = "FAFAFA"
 
-# Location for your logo image. Make sure it's included in your Docker image.
+# Path to your local logo file inside the Docker container
 LOGO_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "logo", "company_logo.png")
 
 
@@ -58,39 +58,39 @@ def lambda_handler(event, context):
     """
     logger.info("🚀 Starting final Acta generation with dynamic project list + leader logic.")
 
+    # 1) Load secrets from Secrets Manager
     secret_dict = load_secrets()
     client_id = secret_dict.get("PROJECTPLACE_ROBOT_CLIENT_ID", "")
     client_secret = secret_dict.get("PROJECTPLACE_ROBOT_CLIENT_SECRET", "")
     if not client_id or not client_secret:
         return {"statusCode": 500, "body": "Missing ProjectPlace credentials."}
 
-    # 1) Get Robot Token
+    # 2) Get Robot Token
     token = get_robot_access_token(client_id, client_secret)
     if not token:
         return {"statusCode": 500, "body": "Failed to get ProjectPlace token."}
 
-    # 2) Dynamically fetch *active* enterprise projects
+    # 3) Dynamically fetch active enterprise projects
     projects = get_all_account_projects(token, include_archived=False)
     if not projects:
         msg = "No active projects returned. Possibly no new or user has limited visibility."
         logger.warning(msg)
         return {"statusCode": 200, "body": msg}
 
-    # 3) Generate Excel with tasks (cards) for each project + comments
+    # 4) Generate Excel
     excel_path = generate_excel_report(token, projects)
     if not excel_path:
         return {"statusCode": 500, "body": "No Excel generated (no cards?)."}
 
-    # 4) Build DataFrame from the Excel
+    # 5) Build DF from Excel, store in Dynamo
     df = pd.read_excel(excel_path)
     if df.empty:
         logger.warning("Excel is empty—no tasks to process.")
         return {"statusCode": 200, "body": "No tasks found in Excel."}
 
-    # 5) Store in Dynamo
     store_in_dynamodb(df)
 
-    # 6) snippet => filter + parse
+    # 6) snippet_filter => parse columns, keep col_id=1
     df = snippet_filter(df)
     if df.empty:
         logger.warning("No tasks remain after snippet filter.")
@@ -100,11 +100,10 @@ def lambda_handler(event, context):
     grouped = df.groupby("project_id")
     doc_count = 0
     for pid, project_df in grouped:
-        # doc.save(...) is synchronous
         doc_path = build_acta_for_project(pid, project_df)
         if doc_path:
             doc_count += 1
-            # Upload doc to S3 => actas/Acta_{projectName}_{pid}.docx
+            # Upload doc => actas/Acta_{safe_proj}_{pid}.docx
             first_row = project_df.iloc[0]
             p_name = str(first_row.get("project_name", "UnknownProject"))
             safe_proj = p_name.replace("/", "_").replace(" ", "_")
@@ -155,8 +154,7 @@ def get_robot_access_token(client_id, client_secret):
 def get_all_account_projects(token, include_archived=False):
     """
     Calls /1/account/projects to list projects for the entire enterprise.
-    If include_archived=False, we skip archived projects in the result.
-    Return a list of dicts, each with at least 'id' and 'name'.
+    If include_archived=False, skip archived.
     """
     url = f"{PROJECTPLACE_API_URL}/1/account/projects"
     headers = {
@@ -181,7 +179,6 @@ def get_all_account_projects(token, include_archived=False):
             return []
 
         if not include_archived:
-            # Filter out archived
             active_projects = [p for p in projects_list if not p.get("archived", False)]
             logger.info(f"Fetched {len(active_projects)} active projects.")
             return active_projects
@@ -198,8 +195,7 @@ def get_all_account_projects(token, include_archived=False):
 # ----------------------------------------------------------------------------
 def generate_excel_report(token, projects):
     """
-    1) For each project in 'projects', fetch its cards + comments
-    2) Write all rows to Excel => OUTPUT_EXCEL
+    For each project in 'projects', fetch its cards + comments => write to Excel
     """
     if not projects:
         logger.warning("No projects provided to generate_excel_report.")
@@ -216,7 +212,7 @@ def generate_excel_report(token, projects):
         try:
             resp = requests.get(cards_url, headers=headers)
             resp.raise_for_status()
-            cards = resp.json()  # list of card dicts
+            cards = resp.json()
             for c in cards:
                 row = dict(c)
                 cid = c.get("id")
@@ -232,7 +228,7 @@ def generate_excel_report(token, projects):
 
                 all_cards.append(row)
 
-            logger.info(f"Fetched {len(cards)} cards from project '{p_name}' ({pid}).")
+            logger.info(f"Fetched {len(cards)} cards from '{p_name}' ({pid}).")
 
         except Exception as e:
             logger.error(f"Error fetching cards for project {pid}: {str(e)}")
@@ -246,12 +242,11 @@ def generate_excel_report(token, projects):
     logger.info(f"✅ Wrote {len(df)} rows to {OUTPUT_EXCEL}")
     return OUTPUT_EXCEL
 
-
 def fetch_comments_for_card(token, card_id):
     if not card_id:
         return []
     url = f"{PROJECTPLACE_API_URL}/1/cards/{card_id}/comments"
-    headers = {"Authorization": f"Bearer {token}", "Accept":"application/json"}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     out = []
     try:
         r = requests.get(url, headers=headers)
@@ -289,6 +284,10 @@ def store_in_dynamodb(df):
 # 5) SNIPPET FILTER
 # ----------------------------------------------------------------------------
 def snippet_filter(df):
+    """
+    Keep col_id=1, parse last comment => 'comments_parsed'
+    Map 'creator_name', 'project_name', 'planlet_name', wbs
+    """
     if "column_id" in df.columns:
         df = df[df["column_id"] == 1].copy()
 
@@ -347,10 +346,17 @@ def parse_wbs_id(wbs_str):
 # 6) BUILD ACTA => includes COMPROMISOS
 # ----------------------------------------------------------------------------
 def build_acta_for_project(pid, project_df):
+    """
+    Creates a docx for each project => includes:
+      - 2x2 table with FECHA + PROYECTO / NO. PROYECTO + LÍDER
+      - ASISTENCIA table
+      - Project status table
+      - COMPROMISOS table
+      - Saves doc => /tmp => returns path
+    """
     if project_df.empty:
         return None
 
-    # sort by wbs_tuple if present
     if "wbs_tuple" in project_df.columns:
         project_df = project_df.sort_values("wbs_tuple", ascending=True)
 
@@ -362,17 +368,17 @@ def build_acta_for_project(pid, project_df):
     set_document_margins_and_orientation(doc)
     add_page_x_of_y_footer(doc)
 
-    # Top header (title + optional logo)
+    # Header => Big title + optional logo
     add_top_header_table(doc, "ACTA DE SEGUIMIENTO", LOGO_IMAGE_PATH)
     doc.add_paragraph()
 
-    # 2x2 => FECHA, PROYECTO / NO. PROYECTO, LÍDER DEL PROYECTO
+    # 2x2 => FECHA / PROYECTO, NO.PROYECTO / LÍDER
     date_now = datetime.now().strftime("%m/%d/%Y")
     date_text = f"FECHA DEL ACTA: {date_now}"
     add_two_by_two_table(doc, date_text, project_name, str(pid), leader_name, shade_color=LIGHT_SHADE_2X2)
 
     # ASISTENCIA table
-    doc.add_paragraph()  # spacing
+    doc.add_paragraph()
     add_asistencia_table(doc, project_df)
 
     # Horizontal line
@@ -391,23 +397,19 @@ def build_acta_for_project(pid, project_df):
     # COMPROMISOS
     add_section_header(doc, "COMPROMISOS")
     add_commitments_table(doc, project_df)
-
-    # Extra paragraph ensures docx is fully formed
-    doc.add_paragraph()
+    doc.add_paragraph()  # ensures docx is fully closed
 
     safe_proj_name = project_name.replace(" ", "_").replace("/", "_")
     doc_path = f"/tmp/Acta_{safe_proj_name}_{pid}.docx"
-
-    # Save => ensures no race condition
     doc.save(doc_path)
-    logger.info(f"Created doc for project {pid}: {doc_path}")
+    logger.info(f"Created doc => {doc_path}")
     return doc_path
-
 
 def add_project_status_table(doc, df):
     """
-    Exclude board_name='COMPROMISOS'. columns => 2.5",2.5",5.0
-    Also exclude planlet_name in ["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"].
+    Exclude board_name='COMPROMISOS'.
+    Exclude planlet_name in ["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"].
+    Columns => HITO (2.5"), ACTIVIDADES (2.5"), DESARROLLO (5.0")
     """
     df = df[df.get("board_name","") != "COMPROMISOS"].copy()
     df = df[~df["planlet_name"].isin(["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"])].copy()
@@ -455,19 +457,18 @@ def add_project_status_table(doc, df):
             run.font.size = Pt(10)
             run.font.name = "Verdana"
 
-        # row striping
+        # Row striping
         if row_idx % 2 == 0:
             for c in new_cells:
                 shade_elm = OxmlElement("w:shd")
                 shade_elm.set(qn("w:fill"), "F2F2F2")
                 c._element.get_or_add_tcPr().append(shade_elm)
 
-
 def add_commitments_table(doc, df):
     """
     board_name='COMPROMISOS', col_id=1 => 3.0",4.0",3.0
     columns => ["COMPROMISO","RESPONSABLE","FECHA"]
-    If date parse fails => show raw comment
+    If date parse fails => raw comment
     """
     commits = df[(df.get("board_name","") == "COMPROMISOS") & (df["column_id"] == 1)]
     if commits.empty:
@@ -496,6 +497,7 @@ def add_commitments_table(doc, df):
         run.font.size = Pt(12)
         run.font.name = "Verdana"
         run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
+
         shading_elm = OxmlElement("w:shd")
         shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
         hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
@@ -508,7 +510,6 @@ def add_commitments_table(doc, df):
         responsible = str(row.get("planlet_name",""))
         last_comment = str(row.get("comments_parsed",""))
 
-        # parse date => if fail => raw comment
         date_str = parse_comment_for_date(last_comment)
         if not date_str.strip():
             date_str = last_comment.strip("[]'\" ") or "N/A"
@@ -530,11 +531,10 @@ def add_commitments_table(doc, df):
                 c._element.get_or_add_tcPr().append(shade_elm)
         row_idx += 1
 
-
 def parse_comment_for_date(comment_text):
     """
     Attempt dd/mm/yyyy and mm/dd/yyyy. If fail => ""
-    Then fallback to raw text in the table function.
+    Then fallback to raw text
     """
     c = comment_text.strip("[]'\" ")
     for fmt in ("%d/%m/%Y", "%m/%d/%Y"):
@@ -550,12 +550,12 @@ def parse_comment_for_date(comment_text):
 # ----------------------------------------------------------------------------
 def upload_file_to_s3(file_path, s3_key):
     """
-    Upload with ContentType and ContentDisposition so that even direct S3
-    Console downloads preserve the .docx or .xlsx properly.
+    S3 upload with correct ContentType + ContentDisposition => docx recognized by Word
     """
     s3 = boto3.client("s3", region_name=REGION)
     content_type = infer_content_type(s3_key)
     disposition = f'attachment; filename="{os.path.basename(s3_key)}"'
+
     try:
         s3.upload_file(
             Filename=file_path,
@@ -572,18 +572,13 @@ def upload_file_to_s3(file_path, s3_key):
         logger.error(f"❌ S3 upload error: {str(e)}")
         return False
 
-
 def infer_content_type(s3_key):
-    """
-    Return the proper MIME type for docx/xlsx, else octet-stream.
-    """
     if s3_key.lower().endswith(".docx"):
         return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     elif s3_key.lower().endswith(".xlsx"):
         return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     else:
         return "application/octet-stream"
-
 
 def set_document_margins_and_orientation(doc):
     section = doc.sections[0]
@@ -629,8 +624,7 @@ def add_page_x_of_y_footer(doc):
 
 def add_top_header_table(doc, main_title, logo_path=None):
     """
-    2 columns => each 5.0"
-    Title => left col, optional logo => right col
+    2 columns => 5.0" each. Title left, optional logo right
     """
     table = doc.add_table(rows=1, cols=2)
     table.style = "Table Grid"
@@ -650,7 +644,6 @@ def add_top_header_table(doc, main_title, logo_path=None):
     p_right = right_cell.paragraphs[0]
     p_right.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
 
-    # Existence check for logo
     if logo_path and os.path.exists(logo_path):
         run_logo = p_right.add_run()
         run_logo.add_picture(logo_path, width=Inches(3.0))
@@ -661,7 +654,7 @@ def add_top_header_table(doc, main_title, logo_path=None):
 
 def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, shade_color=None):
     """
-    2x2 => (FECHA DEL ACTA, PROYECTO) / (NO. PROYECTO, LÍDER DEL PROYECTO)
+    2x2 => row0 col0=FECHA, row0 col1=PROYECTO, row1 col0=NO.PROYECTO, row1 col1=LIDER
     """
     table = doc.add_table(rows=2, cols=2)
     table.style = "Table Grid"
@@ -686,7 +679,7 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
     if shade_color:
         shade_cell(c_0_1, shade_color)
 
-    # row1 col0 => NO. PROYECTO
+    # row1 col0 => NO.PROYECTO
     c_1_0 = table.cell(1,0)
     r_1_0 = c_1_0.paragraphs[0].add_run(f"NO. DE PROYECTO  {project_id}")
     r_1_0.font.size = Pt(12)
@@ -704,11 +697,8 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
 
 def add_asistencia_table(doc, df):
     """
-    Creates a 2x2 table:
-      row0 col0 => "ASISTENCIA"
-      row0 col1 => "ASISTENCIA IKUSI" (or "CLIENTE" if you prefer)
-      row1 col0 => last_comment from planlet_name="ASISTENCIA"
-      row1 col1 => last_comment from planlet_name="ASISTENCIA CLIENTE"
+    2x2 => row0 => (ASISTENCIA, ASISTENCIA IKUSI),
+             row1 => data from planlet_name=ASISTENCIA, planlet_name=ASISTENCIA CLIENTE
     """
     table = doc.add_table(rows=2, cols=2)
     table.style = "Table Grid"
@@ -716,10 +706,11 @@ def add_asistencia_table(doc, df):
     table.columns[0].width = Inches(5.0)
     table.columns[1].width = Inches(5.0)
 
-    # Headers
+    # Headers => row 0
     hdr_row = table.rows[0]
     hdr_cells = hdr_row.cells
 
+    # col0 => "ASISTENCIA"
     hdr_cells[0].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     hdr_cells[0].text = "ASISTENCIA"
     run0 = hdr_cells[0].paragraphs[0].runs[0]
@@ -727,11 +718,11 @@ def add_asistencia_table(doc, df):
     run0.font.size = Pt(12)
     run0.font.name = "Verdana"
     run0.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
-
     shading_elm0 = OxmlElement("w:shd")
     shading_elm0.set(qn("w:fill"), BRAND_COLOR_HEADER)
     hdr_cells[0]._element.get_or_add_tcPr().append(shading_elm0)
 
+    # col1 => "ASISTENCIA IKUSI"
     hdr_cells[1].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     hdr_cells[1].text = "ASISTENCIA IKUSI"
     run1 = hdr_cells[1].paragraphs[0].runs[0]
@@ -739,27 +730,22 @@ def add_asistencia_table(doc, df):
     run1.font.size = Pt(12)
     run1.font.name = "Verdana"
     run1.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
-
     shading_elm1 = OxmlElement("w:shd")
     shading_elm1.set(qn("w:fill"), BRAND_COLOR_HEADER)
     hdr_cells[1]._element.get_or_add_tcPr().append(shading_elm1)
 
-    # Row1 => data
+    # row 1 => data from planlet_name="ASISTENCIA" & "ASISTENCIA CLIENTE"
     row_asist = df[(df["planlet_name"]=="ASISTENCIA") & (df["column_id"]==1)]
-    text_asist = ""
-    if not row_asist.empty:
-        text_asist = str(row_asist.iloc[0].get("comments_parsed",""))
+    text_asist = str(row_asist.iloc[0].get("comments_parsed","")) if not row_asist.empty else ""
 
     row_asist_cliente = df[(df["planlet_name"]=="ASISTENCIA CLIENTE") & (df["column_id"]==1)]
-    text_asist_cliente = ""
-    if not row_asist_cliente.empty:
-        text_asist_cliente = str(row_asist_cliente.iloc[0].get("comments_parsed",""))
+    text_asist_cliente = str(row_asist_cliente.iloc[0].get("comments_parsed","")) if not row_asist_cliente.empty else ""
 
     data_row = table.rows[1].cells
     data_row[0].text = text_asist
     data_row[1].text = text_asist_cliente
 
-    # Style data row
+    # Style => Verdana 10pt
     for col_idx in range(2):
         p = data_row[col_idx].paragraphs[0]
         p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
@@ -786,9 +772,6 @@ def add_horizontal_rule(doc):
     run.font.size = Pt(12)
 
 def shade_cell(cell, color):
-    """
-    Shades cell background => color
-    """
     shade_elm = OxmlElement("w:shd")
     shade_elm.set(qn("w:fill"), color)
     cell._element.get_or_add_tcPr().append(shade_elm)

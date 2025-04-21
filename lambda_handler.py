@@ -133,6 +133,7 @@ def lambda_handler(event, context):
     }
     return {"statusCode": 200, "body": json.dumps(msg)}
 
+
 # ----------------------------------------------------------------------------
 # 1) SECRETS & OAUTH
 # ----------------------------------------------------------------------------
@@ -159,6 +160,7 @@ def get_robot_access_token(client_id, client_secret):
     except requests.exceptions.RequestException as e:
         logger.error(f"Token fetch error: {str(e)}")
         return None
+
 
 # ----------------------------------------------------------------------------
 # 2) ENTERPRISE PROJECTS
@@ -201,6 +203,7 @@ def get_all_account_projects(token, include_archived=False):
     except requests.exceptions.RequestException as e:
         logger.error(f"Error listing enterprise projects: {e}")
         return []
+
 
 # ----------------------------------------------------------------------------
 # 3) EXCEL GENERATION
@@ -249,6 +252,7 @@ def generate_excel_report(token, projects):
     logger.info(f"✅ Wrote {len(df)} rows to {OUTPUT_EXCEL}")
     return OUTPUT_EXCEL
 
+
 def fetch_comments_for_card(token, card_id):
     if not card_id:
         return []
@@ -263,6 +267,7 @@ def fetch_comments_for_card(token, card_id):
     except Exception as e:
         logger.error(f"Failed to fetch comments for card {card_id}: {str(e)}")
     return out
+
 
 # ----------------------------------------------------------------------------
 # 4) DYNAMO
@@ -286,6 +291,7 @@ def store_in_dynamodb(df):
         table.put_item(Item=item)
         inserted += 1
     logger.info(f"Inserted {inserted} items into {DYNAMO_TABLE}")
+
 
 # ----------------------------------------------------------------------------
 # 5) SNIPPET FILTER
@@ -344,6 +350,7 @@ def parse_wbs_id(wbs_str):
             pass
     return tuple(out)
 
+
 # ----------------------------------------------------------------------------
 # 6) BUILD ACTA => includes COMPROMISOS
 # ----------------------------------------------------------------------------
@@ -393,6 +400,7 @@ def build_acta_for_project(pid, project_df):
     logger.info(f"Created doc => {doc_path}")
     return doc_path
 
+
 def add_project_status_table(doc, df):
     df = df[df.get("board_name","") != "COMPROMISOS"].copy()
     df = df[~df["planlet_name"].isin(["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"])].copy()
@@ -416,7 +424,9 @@ def add_project_status_table(doc, df):
     table.columns[1].width = Inches(2.5)
     table.columns[2].width = Inches(5.0)
 
-    headers = ["HITO","ACTIVIDADES","DESARROLLO"]
+    # CHANGED: "HITO" => "HITO/TEMA"
+    headers = ["HITO/TEMA", "ACTIVIDADES", "DESARROLLO"]  # <--- CHANGED
+
     hdr_cells = hdr_row.cells
     for i, hdr_text in enumerate(headers):
         hdr_cells[i].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
@@ -445,6 +455,7 @@ def add_project_status_table(doc, df):
                 shade_elm = OxmlElement("w:shd")
                 shade_elm.set(qn("w:fill"), "F2F2F2")
                 c._element.get_or_add_tcPr().append(shade_elm)
+
 
 def add_commitments_table(doc, df):
     commits = df[(df.get("board_name","") == "COMPROMISOS") & (df["column_id"] == 1)]
@@ -506,6 +517,7 @@ def add_commitments_table(doc, df):
                 c._element.get_or_add_tcPr().append(shade_elm)
         row_idx += 1
 
+
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")
     for fmt in ("%d/%m/%Y", "%m/%d/%Y"):
@@ -515,6 +527,7 @@ def parse_comment_for_date(comment_text):
         except ValueError:
             pass
     return ""
+
 
 # ----------------------------------------------------------------------------
 # S3 & HELPER FUNCS
@@ -543,6 +556,7 @@ def upload_file_to_s3(file_path, s3_key):
     except Exception as e:
         logger.error(f"❌ S3 upload error: {str(e)}")
         return False
+
 
 def convert_docx_to_pdf(doc_path):
     """
@@ -573,6 +587,7 @@ def convert_docx_to_pdf(doc_path):
     logger.info(f"PDF created => {pdf_path}")
     return pdf_path
 
+
 def infer_content_type(s3_key):
     if s3_key.lower().endswith(".docx"):
         return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -583,6 +598,7 @@ def infer_content_type(s3_key):
     else:
         return "application/octet-stream"
 
+
 def set_document_margins_and_orientation(doc):
     section = doc.sections[0]
     section.orientation = WD_ORIENT.LANDSCAPE
@@ -592,6 +608,7 @@ def set_document_margins_and_orientation(doc):
     section.right_margin = Inches(0.5)
     section.top_margin = Inches(0.5)
     section.bottom_margin = Inches(0.5)
+
 
 def add_page_x_of_y_footer(doc):
     section = doc.sections[0]
@@ -625,6 +642,7 @@ def add_page_x_of_y_footer(doc):
     fld_pages.append(r_pages)
     run._r.append(fld_pages)
 
+
 def add_top_header_table(doc, main_title, logo_path=None):
     """
     2 columns => each 5.0"
@@ -655,6 +673,7 @@ def add_top_header_table(doc, main_title, logo_path=None):
         fallback_run = p_right.add_run("[INSERT COMPANY LOGO HERE]")
         fallback_run.bold = True
         fallback_run.font.size = Pt(12)
+
 
 def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, shade_color=None):
     """
@@ -699,6 +718,7 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
     if shade_color:
         shade_cell(c_1_1, shade_color)
 
+
 def add_asistencia_table(doc, df):
     """
     2x2 => row0 col0 => "ASISTENCIA", row0 col1 => "ASISTENCIA IKUSI"
@@ -711,11 +731,13 @@ def add_asistencia_table(doc, df):
     table.columns[0].width = Inches(5.0)
     table.columns[1].width = Inches(5.0)
 
-    # Headers => row 0
+    # row0 => Headers
     hdr_row = table.rows[0]
     hdr_cells = hdr_row.cells
+
+    # CHANGED: "ASISTENCIA" → "ASISTENCIA CLIENTE"
     hdr_cells[0].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    hdr_cells[0].text = "ASISTENCIA"
+    hdr_cells[0].text = "ASISTENCIA CLIENTE"  # <--- CHANGED
     run0 = hdr_cells[0].paragraphs[0].runs[0]
     run0.bold = True
     run0.font.size = Pt(12)
@@ -736,7 +758,7 @@ def add_asistencia_table(doc, df):
     shading_elm1.set(qn("w:fill"), BRAND_COLOR_HEADER)
     hdr_cells[1]._element.get_or_add_tcPr().append(shading_elm1)
 
-    # row 1 => data from planlet_name="ASISTENCIA" & "ASISTENCIA CLIENTE"
+    # row1 => data from planlet_name= "ASISTENCIA" & planlet_name= "ASISTENCIA CLIENTE"
     row_asist = df[(df["planlet_name"]=="ASISTENCIA") & (df["column_id"]==1)]
     text_asist = ""
     if not row_asist.empty:
@@ -751,12 +773,14 @@ def add_asistencia_table(doc, df):
     data_row[0].text = text_asist
     data_row[1].text = text_asist_cliente
 
+    # style
     for col_idx in range(2):
         p = data_row[col_idx].paragraphs[0]
         p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
         run_data = p.runs[0]
         run_data.font.size = Pt(10)
         run_data.font.name = "Verdana"
+
 
 def add_section_header(doc, header_text):
     p = doc.add_paragraph()
@@ -767,11 +791,13 @@ def add_section_header(doc, header_text):
     run_h.font.name = "Verdana"
     doc.add_paragraph()
 
+
 def add_horizontal_rule(doc):
     line_para = doc.add_paragraph()
     line_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     run = line_para.add_run("_______________________________________________________________")
     run.font.size = Pt(12)
+
 
 def shade_cell(cell, color):
     shade_elm = OxmlElement("w:shd")

@@ -108,8 +108,8 @@ def lambda_handler(event, context):
             first_row = project_df.iloc[0]
             p_name = str(first_row.get("project_name", "UnknownProject"))
             safe_proj = p_name.replace("/", "_").replace(" ", "_")
-            s3_key = f"actas/Acta_{safe_proj}_{pid}.docx"
-            upload_file_to_s3(doc_path, s3_key)
+            s3_key_docx = f"actas/Acta_{safe_proj}_{pid}.docx"
+            upload_file_to_s3(doc_path, s3_key_docx)
 
     # 8) Upload Excel as well
     s3_excel_key = "actas/Acta_de_Seguimiento.xlsx"
@@ -550,16 +550,21 @@ def parse_comment_for_date(comment_text):
 # ----------------------------------------------------------------------------
 def upload_file_to_s3(file_path, s3_key):
     """
-    Fix #1: Added ContentType to prevent corruption
+    Upload with ContentType and ContentDisposition so that even direct S3
+    Console downloads preserve the .docx or .xlsx properly.
     """
     s3 = boto3.client("s3", region_name=REGION)
     content_type = infer_content_type(s3_key)
+    disposition = f'attachment; filename="{os.path.basename(s3_key)}"'
     try:
         s3.upload_file(
-            file_path,
-            S3_BUCKET,
-            s3_key,
-            ExtraArgs={"ContentType": content_type}
+            Filename=file_path,
+            Bucket=S3_BUCKET,
+            Key=s3_key,
+            ExtraArgs={
+                "ContentType": content_type,
+                "ContentDisposition": disposition
+            }
         )
         logger.info(f"✅ Uploaded {file_path} => s3://{S3_BUCKET}/{s3_key}")
         return True
@@ -567,7 +572,11 @@ def upload_file_to_s3(file_path, s3_key):
         logger.error(f"❌ S3 upload error: {str(e)}")
         return False
 
+
 def infer_content_type(s3_key):
+    """
+    Return the proper MIME type for docx/xlsx, else octet-stream.
+    """
     if s3_key.lower().endswith(".docx"):
         return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     elif s3_key.lower().endswith(".xlsx"):
@@ -697,7 +706,7 @@ def add_asistencia_table(doc, df):
     """
     Creates a 2x2 table:
       row0 col0 => "ASISTENCIA"
-      row0 col1 => "ASISTENCIA IKUSI"
+      row0 col1 => "ASISTENCIA IKUSI" (or "CLIENTE" if you prefer)
       row1 col0 => last_comment from planlet_name="ASISTENCIA"
       row1 col1 => last_comment from planlet_name="ASISTENCIA CLIENTE"
     """
@@ -724,7 +733,7 @@ def add_asistencia_table(doc, df):
     hdr_cells[0]._element.get_or_add_tcPr().append(shading_elm0)
 
     hdr_cells[1].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    hdr_cells[1].text = "ASISTENCIA IKUSI"  # or "ASISTENCIA CLIENTE" if needed
+    hdr_cells[1].text = "ASISTENCIA IKUSI"
     run1 = hdr_cells[1].paragraphs[0].runs[0]
     run1.bold = True
     run1.font.size = Pt(12)

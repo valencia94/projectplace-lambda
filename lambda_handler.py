@@ -29,21 +29,22 @@ SECRET_NAME = "ProjectPlaceAPICredentials"
 REGION = "us-east-2"
 PROJECTPLACE_API_URL = "https://api.projectplace.com"
 
-# We no longer use a hardcoded PROJECT_IDS list—it's dynamic now.
-# PROJECT_IDS = ["1000000063154415", ...]
-
 OUTPUT_EXCEL = "/tmp/Acta_de_Seguimiento.xlsx"
 DYNAMO_TABLE = os.getenv("DYNAMODB_TABLE_NAME", "ProjectPlace_DataExtrator_landing_table_v3")
 S3_BUCKET = os.getenv("S3_BUCKET_NAME", "projectplace-dv-2025-x9a7b")
 
-LOGO_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "logo", "company_logo.png")
-BRAND_COLOR_HEADER = "2E86C1"
+# 4) Updated brand header color to #4AC795
+BRAND_COLOR_HEADER = "4AC795"
 LIGHT_SHADE_2X2 = "FAFAFA"
+
+# Ensure we check if a local logo file exists:
+LOGO_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "logo", "company_logo.png")
+
 
 def lambda_handler(event, context):
     """
     1) Load secrets -> get token
-    2) Fetch *all active enterprise projects* dynamically (no more hardcoded PROJECT_IDS).
+    2) Fetch *all active enterprise projects* dynamically
     3) Generate Excel with tasks (cards) for each project + comments
     4) snippet_filter => col_id=1, parse 'creator' => 'creator_name', parse last comment
     5) Multi-doc creation (one doc per project)
@@ -96,6 +97,7 @@ def lambda_handler(event, context):
     grouped = df.groupby("project_id")
     doc_count = 0
     for pid, project_df in grouped:
+        # The .save(...) call is synchronous, so no race condition with the S3 upload below
         doc_path = build_acta_for_project(pid, project_df)
         if doc_path:
             doc_count += 1
@@ -165,7 +167,6 @@ def get_all_account_projects(token, include_archived=False):
         r = requests.get(url, headers=headers, params=params)
         r.raise_for_status()
         data = r.json()
-        # data is typically {"projects": [ {id, name, archived}, ... ]}
         if not isinstance(data, dict):
             logger.warning(f"Projects response not dict: {type(data)} => {data}")
             return []
@@ -189,7 +190,7 @@ def get_all_account_projects(token, include_archived=False):
         return []
 
 # ----------------------------------------------------------------------------
-# 3) EXCEL GENERATION - Now using dynamic project list
+# 3) EXCEL GENERATION
 # ----------------------------------------------------------------------------
 def generate_excel_report(token, projects):
     """
@@ -281,7 +282,7 @@ def store_in_dynamodb(df):
     logger.info(f"Inserted {inserted} items into {DYNAMO_TABLE}")
 
 # ----------------------------------------------------------------------------
-# 5) snippet_filter => col_id=1, parse 'creator', parse wbs, parse last comment
+# 5) snippet_filter => col_id=1, parse 'creator', wbs, last comment
 # ----------------------------------------------------------------------------
 def snippet_filter(df):
     if "column_id" in df.columns:
@@ -368,9 +369,9 @@ def build_acta_for_project(pid, project_df):
     date_text = f"FECHA DEL ACTA: {date_now}"
     add_two_by_two_table(doc, date_text, project_name, str(pid), leader_name, shade_color=LIGHT_SHADE_2X2)
 
-    # NEW: Insert the new “ASISTENCIA” table right below the existing 2x2 table
+    # Insert the new “ASISTENCIA” table
     doc.add_paragraph()  # a blank paragraph for spacing
-    add_asistencia_table(doc, project_df)  # <--- NEW
+    add_asistencia_table(doc, project_df)
 
     # Horizontal line
     doc.add_paragraph()
@@ -387,14 +388,13 @@ def build_acta_for_project(pid, project_df):
     add_section_header(doc, "COMPROMISOS")
     add_commitments_table(doc, project_df)
 
-    # (We've not added any new horizontal rule here, but you can if you want.)
+    # Ensure final paragraph closure for docx
+    doc.add_paragraph()
 
     safe_proj_name = project_name.replace(" ", "_").replace("/", "_")
-
-    # NEW: The “one-line fix” that ensures docx remains fully editable
-    doc.add_paragraph()  # <--- ensures final paragraph is closed properly
-
     doc_path = f"/tmp/Acta_{safe_proj_name}_{pid}.docx"
+
+    # 2) Word Save Flow fix: .save() is synchronous and completes before the next step
     doc.save(doc_path)
     logger.info(f"Created doc for project {pid}: {doc_path}")
     return doc_path
@@ -405,9 +405,8 @@ def add_project_status_table(doc, df):
     Exclude board_name='COMPROMISOS'. columns => 2.5",2.5",5.0
     """
     df = df[df.get("board_name","") != "COMPROMISOS"].copy()
-
-    # NEW: Also exclude planlet_name in ["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"]
-    df = df[~df["planlet_name"].isin(["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"])].copy()  # <--- NEW
+    # Exclude planlet_name in ["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"]
+    df = df[~df["planlet_name"].isin(["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"])].copy()
 
     table_data = []
     for _, row in df.iterrows():
@@ -439,7 +438,7 @@ def add_project_status_table(doc, df):
         run.font.name = "Verdana"
         run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
         shading_elm = OxmlElement("w:shd")
-        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
+        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)  # Updated color
         hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
 
     for row_idx, row_data in enumerate(table_data):
@@ -493,14 +492,14 @@ def add_commitments_table(doc, df):
         run.font.name = "Verdana"
         run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
         shading_elm = OxmlElement("w:shd")
-        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
+        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)  # Updated color
         hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
 
     row_idx = 0
     for _, row in commits.iterrows():
         new_cells = table.add_row().cells
 
-        # reorder => [comp, responsible, date_str]
+        # Reorder => [comp, responsible, date_str]
         comp = str(row.get("title",""))
         responsible = str(row.get("planlet_name",""))
         last_comment = str(row.get("comments_parsed",""))
@@ -531,10 +530,9 @@ def add_commitments_table(doc, df):
 def parse_comment_for_date(comment_text):
     """
     Attempt dd/mm/yyyy and mm/dd/yyyy. If fail => ""
-    Then we fallback to raw text in the table function.
+    Then fallback to raw text in the table function.
     """
     c = comment_text.strip("[]'\" ")
-
     for fmt in ("%d/%m/%Y", "%m/%d/%Y"):
         try:
             dt = datetime.strptime(c, fmt)
@@ -543,19 +541,38 @@ def parse_comment_for_date(comment_text):
             pass
     return ""
 
-
 # ----------------------------------------------------------------------------
 # S3 & HELPER FUNCS
 # ----------------------------------------------------------------------------
+
 def upload_file_to_s3(file_path, s3_key):
+    """
+    Added ContentType to prevent file corruption.
+    We infer content type by file extension (docx / xlsx).
+    """
     s3 = boto3.client("s3", region_name=REGION)
+    content_type = infer_content_type(s3_key)
     try:
-        s3.upload_file(file_path, S3_BUCKET, s3_key)
+        s3.upload_file(
+            file_path,
+            S3_BUCKET,
+            s3_key,
+            ExtraArgs={"ContentType": content_type}  # Fix #1: Add ContentType
+        )
         logger.info(f"✅ Uploaded {file_path} => s3://{S3_BUCKET}/{s3_key}")
         return True
     except Exception as e:
         logger.error(f"❌ S3 upload error: {str(e)}")
         return False
+
+def infer_content_type(s3_key):
+    if s3_key.lower().endswith(".docx"):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif s3_key.lower().endswith(".xlsx"):
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        return "application/octet-stream"
+
 
 def add_section_header(doc, header_text):
     p = doc.add_paragraph()
@@ -567,18 +584,14 @@ def add_section_header(doc, header_text):
     doc.add_paragraph()
 
 def add_horizontal_rule(doc):
-    """
-    Thicker, centered line
-    """
+    """Thicker, centered line."""
     line_para = doc.add_paragraph()
     line_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     run = line_para.add_run("_______________________________________________________________")
     run.font.size = Pt(12)
 
 def shade_cell(cell, color):
-    """
-    Shades cell background => color
-    """
+    """Shades cell background => color."""
     shade_elm = OxmlElement("w:shd")
     shade_elm.set(qn("w:fill"), color)
     cell._element.get_or_add_tcPr().append(shade_elm)
@@ -627,7 +640,7 @@ def add_page_x_of_y_footer(doc):
 
 def add_top_header_table(doc, main_title, logo_path=None):
     """
-    2 columns => each 5.0"
+    2 columns => each ~5.0"
     Title => left col, optional logo => right col
     """
     table = doc.add_table(rows=1, cols=2)
@@ -647,6 +660,8 @@ def add_top_header_table(doc, main_title, logo_path=None):
     right_cell = table.cell(0,1)
     p_right = right_cell.paragraphs[0]
     p_right.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
+
+    # 3) Logo existence check
     if logo_path and os.path.exists(logo_path):
         run_logo = p_right.add_run()
         run_logo.add_picture(logo_path, width=Inches(3.0))
@@ -658,7 +673,7 @@ def add_top_header_table(doc, main_title, logo_path=None):
 def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, shade_color=None):
     """
     2x2 => (FECHA DEL ACTA, PROYECTO), (NO. PROYECTO, LÍDER DEL PROYECTO)
-    Each col => 5.0" wide
+    Each col => ~5.0" wide
     """
     table = doc.add_table(rows=2, cols=2)
     table.style = "Table Grid"
@@ -699,28 +714,25 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
         shade_cell(c_1_1, shade_color)
 
 
-# NEW: The “ASISTENCIA” table function
 def add_asistencia_table(doc, df):
     """
     Creates a 2x2 table:
       row0 col0 => "ASISTENCIA"
       row0 col1 => "ASISTENCIA IKUSI"
-      row1 col0 => last_comment from planlet_name="ASISTENCIA" (col_id=1)
-      row1 col1 => last_comment from planlet_name="ASISTENCIA CLIENTE" (col_id=1)
-    Each column => 5" wide. The formatting mimics the existing style with brand color header.
+      row1 col0 => last_comment from planlet_name="ASISTENCIA"
+      row1 col1 => last_comment from planlet_name="ASISTENCIA CLIENTE"
     """
-
-    # Build the table => 2 rows, 2 columns
     table = doc.add_table(rows=2, cols=2)
     table.style = "Table Grid"
     table.autofit = False
     table.columns[0].width = Inches(5.0)
     table.columns[1].width = Inches(5.0)
 
-    # Row0 => Headers
+    # Headers
     hdr_row = table.rows[0]
-    # col0 => "ASISTENCIA"
     hdr_cells = hdr_row.cells
+
+    # col0 => "ASISTENCIA"
     hdr_cells[0].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     hdr_cells[0].text = "ASISTENCIA"
     run0 = hdr_cells[0].paragraphs[0].runs[0]
@@ -729,7 +741,7 @@ def add_asistencia_table(doc, df):
     run0.font.name = "Verdana"
     run0.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
     shading_elm0 = OxmlElement("w:shd")
-    shading_elm0.set(qn("w:fill"), BRAND_COLOR_HEADER)
+    shading_elm0.set(qn("w:fill"), BRAND_COLOR_HEADER)  # Updated color
     hdr_cells[0]._element.get_or_add_tcPr().append(shading_elm0)
 
     # col1 => "ASISTENCIA IKUSI"
@@ -741,13 +753,11 @@ def add_asistencia_table(doc, df):
     run1.font.name = "Verdana"
     run1.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
     shading_elm1 = OxmlElement("w:shd")
-    shading_elm1.set(qn("w:fill"), BRAND_COLOR_HEADER)
+    shading_elm1.set(qn("w:fill"), BRAND_COLOR_HEADER)  # Updated color
     hdr_cells[1]._element.get_or_add_tcPr().append(shading_elm1)
 
-    # Row1 => data from planlet_name= "ASISTENCIA" & planlet_name= "ASISTENCIA CLIENTE"
-    # Filter df for planlet_name= "ASISTENCIA", col_id=1
+    # Row1 => data
     row_asist = df[(df["planlet_name"]=="ASISTENCIA") & (df["column_id"]==1)]
-    # We'll just take the first such row if multiple
     text_asist = ""
     if not row_asist.empty:
         text_asist = str(row_asist.iloc[0].get("comments_parsed",""))
@@ -761,11 +771,10 @@ def add_asistencia_table(doc, df):
     data_row[0].text = text_asist
     data_row[1].text = text_asist_cliente
 
-    # Mimic existing style => Verdana 10pt
+    # Style data row
     for col_idx in range(2):
         p = data_row[col_idx].paragraphs[0]
         p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
         run_data = p.runs[0]
         run_data.font.size = Pt(10)
         run_data.font.name = "Verdana"
-    # End of add_asistencia_table

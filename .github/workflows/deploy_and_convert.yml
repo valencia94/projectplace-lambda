@@ -8,9 +8,9 @@ on:
 jobs:
   deploy-lambda:
     runs-on: ubuntu-latest
+
     steps:
-      # (Your existing deploy.yml steps go here)
-      - name: 📥 Checkout source
+      - name: 📥 Checkout source code
         uses: actions/checkout@v3
 
       - name: 🔐 Configure AWS credentials
@@ -21,18 +21,78 @@ jobs:
           aws-region: us-east-2
 
       - name: 🐳 Login to Amazon ECR
-        # ...
+        run: |
+          aws ecr get-login-password --region us-east-2 | \
+          docker login --username AWS --password-stdin 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
+
       - name: 🛠 Build and push Docker image to ECR
-        # ...
+        run: |
+          docker build -t projectplace-lambda .
+          docker tag projectplace-lambda:latest 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
+          docker push 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
+
       - name: 🚀 Update Lambda function code
-        # ...
+        run: |
+          aws lambda update-function-code \
+            --function-name ProjectPlaceDataExtractor \
+            --image-uri 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest \
+            --region us-east-2
+
       - name: ⏳ Wait for Lambda code update to finish
-        # ...
-      # etc. (all your steps from deploy.yml)...
+        run: |
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor \
+            --region us-east-2
+
+      - name: 🧬 Merge and apply environment variables
+        run: |
+          OLD_ENV_JSON=$(aws lambda get-function-configuration \
+            --function-name ProjectPlaceDataExtractor \
+            --region us-east-2 \
+            --query 'Environment.Variables' \
+            --output json)
+
+          NEW_ENV_JSON=$(echo "$OLD_ENV_JSON" | jq \
+            --arg secret "ProjectPlaceAPICredentials" \
+            --arg ddb "ProjectPlace_DataExtrator_landing_table_v3" \
+            --arg s3 "projectplace-dv-2025-x9a7b" \
+            '. + {
+              "SECRET_NAME": $secret,
+              "DYNAMODB_TABLE_NAME": $ddb,
+              "S3_BUCKET_NAME": $s3
+            }')
+
+          FINAL_ENV=$(jq -n --argjson vars "$NEW_ENV_JSON" '{Variables: $vars}')
+          echo "$FINAL_ENV" > tmp_env.json
+
+          aws lambda update-function-configuration \
+            --function-name ProjectPlaceDataExtractor \
+            --region us-east-2 \
+            --environment file://tmp_env.json
+
+      - name: ⏳ Wait for environment update to finish
+        run: |
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor \
+            --region us-east-2
+
+      # If you prefer to invoke the Lambda asynchronously or test it:
+      - name: 🏁 Invoke Lambda Asynchronously (non-blocking)
+        run: |
+          aws lambda invoke \
+            --function-name ProjectPlaceDataExtractor \
+            --region us-east-2 \
+            --payload '{}' \
+            --invocation-type Event \
+            out.json \
+            --cli-binary-format raw-in-base64-out
+          echo "✅ Lambda invoked asynchronously. It will generate Actas in the background."
+
 
   convert-docx:
     runs-on: ubuntu-latest
-    needs: [deploy-lambda]  # <-- This means "wait until deploy-lambda job finishes"
+    needs: [deploy-lambda]  # <-- ensures this job only runs if 'deploy-lambda' succeeds
+
     steps:
       - name: 📥 Checkout Source
         uses: actions/checkout@v3
@@ -51,12 +111,41 @@ jobs:
 
       - name: 📥 Download all .docx from S3
         run: |
-          # (Steps from your convert_all_docx.yml)
-          aws s3 sync ...
-          # ...
-      - name: 🖨 Convert .docx => .pdf
+          mkdir -p actas
+          echo "Syncing *.docx from s3://projectplace-dv-2025-x9a7b/actas -> local 'actas' folder..."
+          aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas --exclude "*" --include "*.docx"
+
+          echo "List of downloaded files in 'actas':"
+          ls -l actas
+
+          # Optional: If none, fail
+          COUNT_DOCX=$(ls -1 actas/*.docx 2>/dev/null | wc -l)
+          if [ "$COUNT_DOCX" -eq 0 ]; then
+            echo "No .docx files found in 'actas'!"
+            exit 1
+          fi
+
+      - name: 🖨 Convert each .docx => .pdf
         run: |
-          # ...
-      - name: 🚀 Upload PDF back to S3
+          cd actas
+          echo "Now in $(pwd). Listing before convert:"
+          ls -l
+
+          for f in *.docx; do
+            echo "Converting '$f' to PDF..."
+            libreoffice --headless --convert-to pdf "$f"
+          done
+
+          echo "Conversion done. Final files:"
+          ls -l
+
+      - name: 🚀 Upload .pdf back to S3
         run: |
-          # ...
+          echo "Syncing newly created .pdf -> s3://projectplace-dv-2025-x9a7b/actas..."
+          aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
+            --exclude "*" \
+            --include "*.pdf" \
+            --content-type "application/pdf" \
+            --content-disposition "attachment"
+
+          echo "✅ PDF upload complete!"

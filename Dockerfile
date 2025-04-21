@@ -1,20 +1,27 @@
 FROM public.ecr.aws/lambda/python:3.10
 
-# 1) Enable EPEL and clean metadata
-RUN amazon-linux-extras enable epel && \
-    yum clean metadata
+# 1) Install curl so we can fetch EPEL RPM
+RUN yum -y install curl
 
-# 2) Install epel-release and attempt installing LibreOffice headless
-RUN yum install -y epel-release && \
-    yum install -y libreoffice-headless
+# 2) Download the EPEL 7 release RPM 
+#    (Amazon Linux 2 is derived from RHEL 7, so we use epel-release-latest-7)
+RUN curl -O https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
 
-# 3) Copy and install dependencies
+# 3) Install the EPEL release RPM
+RUN rpm -ivh epel-release-latest-7.noarch.rpm
+
+# 4) Try installing LibreOffice (headless or full). 
+#    If you get "No package libreoffice-headless available",
+#    try 'libreoffice' or 'libreoffice-core libreoffice-writer' instead.
+RUN yum -y install libreoffice-headless || yum -y install libreoffice || yum -y install libreoffice-core libreoffice-writer
+
+# 5) Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
 
-# 4) Copy your Lambda code
+# 6) Copy your Lambda code + logo folder
 COPY lambda_handler.py ./
 COPY logo/ ./logo/
 
-# 5) Lambda entry point
+# 7) Lambda entry point
 CMD [ "lambda_handler.lambda_handler" ]

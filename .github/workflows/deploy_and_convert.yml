@@ -32,23 +32,12 @@ jobs:
           docker tag projectplace-lambda:latest 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
           docker push 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
 
-      - name: 🚀 Update Lambda function code with retry-safe loop
+      - name: 🚀 Update Lambda function code
         run: |
-          for i in {1..5}; do
-            echo "⏳ Attempt $i: Updating Lambda code..."
-            aws lambda update-function-code \
-              --function-name ProjectPlaceDataExtractor \
-              --image-uri 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest \
-              --region us-east-2 && break
-
-            echo "⚠️ Lambda still locked (ResourceConflict). Retrying in $((10 * i))s..."
-            sleep $((10 * i))
-
-            if [ "$i" -eq 5 ]; then
-              echo "❌ Maximum retries reached. Lambda is still locked."
-              exit 1
-            fi
-          done
+          aws lambda update-function-code \
+            --function-name ProjectPlaceDataExtractor \
+            --image-uri 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest \
+            --region us-east-2
 
       - name: ⏳ Wait for Lambda code update to finish
         run: |
@@ -88,16 +77,16 @@ jobs:
             --function-name ProjectPlaceDataExtractor \
             --region us-east-2
 
-      - name: 🏁 Invoke Lambda and wait for completion
+      - name: 🏁 Invoke Lambda Asynchronously
         run: |
           aws lambda invoke \
             --function-name ProjectPlaceDataExtractor \
             --region us-east-2 \
             --payload '{}' \
-            --cli-binary-format raw-in-base64-out \
-            out.json
-          echo "✅ Lambda completed successfully:"
-          cat out.json
+            --invocation-type Event \
+            out.json \
+            --cli-binary-format raw-in-base64-out
+          echo "✅ Lambda invoked asynchronously. Waiting for Actas to be ready..."
 
   convert-docx:
     runs-on: ubuntu-latest
@@ -119,17 +108,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libreoffice
 
-      - name: 📥 Download all .docx from S3
+      - name: 📥 Wait and download .docx from S3
         run: |
           mkdir -p actas
-          echo "📥 Syncing .docx files from S3..."
-          aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas --exclude "*" --include "*.docx"
-
-          COUNT_DOCX=$(ls -1 actas/*.docx 2>/dev/null | wc -l)
-          if [ "$COUNT_DOCX" -eq 0 ]; then
-            echo "❌ No DOCX files found."
-            exit 1
-          fi
+          for i in {1..15}; do
+            echo "⏳ Attempt $i: Checking for .docx files in S3..."
+            aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas --exclude "*" --include "*.docx"
+            COUNT=$(ls -1 actas/*.docx 2>/dev/null | wc -l)
+            if [ "$COUNT" -gt 0 ]; then
+              echo "✅ Found $COUNT .docx files. Proceeding."
+              break
+            fi
+            echo "⏳ No .docx found yet. Retrying in 20s..."
+            sleep 20
+            if [ "$i" -eq 15 ]; then
+              echo "❌ Timeout. No .docx files found after waiting."
+              exit 1
+            fi
+          done
 
       - name: 🖨 Convert each .docx => .pdf
         run: |

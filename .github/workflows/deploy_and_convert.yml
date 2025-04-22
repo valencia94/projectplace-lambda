@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch: {}  # <--- Allows manual “Run workflow” in the Actions tab
+  workflow_dispatch: {}
 
 jobs:
   deploy-lambda:
@@ -77,22 +77,21 @@ jobs:
             --function-name ProjectPlaceDataExtractor \
             --region us-east-2
 
-      # OPTIONAL: Test the Lambda by invoking it asynchronously
-      - name: 🏁 Invoke Lambda Asynchronously (non-blocking)
+      # ✅ Synchronous Invocation
+      - name: 🏁 Invoke Lambda and wait for completion
         run: |
           aws lambda invoke \
             --function-name ProjectPlaceDataExtractor \
             --region us-east-2 \
             --payload '{}' \
-            --invocation-type Event \
-            out.json \
-            --cli-binary-format raw-in-base64-out
-          echo "✅ Lambda invoked asynchronously. It will generate Actas in the background."
-
+            --cli-binary-format raw-in-base64-out \
+            out.json
+          echo "✅ Lambda finished. Contents:"
+          cat out.json
 
   convert-docx:
     runs-on: ubuntu-latest
-    needs: [deploy-lambda]  # Run after 'deploy-lambda' job completes successfully
+    needs: [deploy-lambda]
 
     steps:
       - name: 📥 Checkout Source
@@ -113,13 +112,8 @@ jobs:
       - name: 📥 Download all .docx from S3
         run: |
           mkdir -p actas
-          echo "Syncing *.docx from s3://projectplace-dv-2025-x9a7b/actas -> local 'actas' folder..."
           aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas --exclude "*" --include "*.docx"
-
-          echo "List of downloaded files in 'actas':"
           ls -l actas
-
-          # Optional: If none, fail
           COUNT_DOCX=$(ls -1 actas/*.docx 2>/dev/null | wc -l)
           if [ "$COUNT_DOCX" -eq 0 ]; then
             echo "No .docx files found in 'actas'!"
@@ -129,24 +123,14 @@ jobs:
       - name: 🖨 Convert each .docx => .pdf
         run: |
           cd actas
-          echo "Now in $(pwd). Listing before convert:"
-          ls -l
-
           for f in *.docx; do
-            echo "Converting '$f' to PDF..."
             libreoffice --headless --convert-to pdf "$f"
           done
 
-          echo "Conversion done. Final files:"
-          ls -l
-
       - name: 🚀 Upload .pdf back to S3
         run: |
-          echo "Syncing newly created .pdf -> s3://projectplace-dv-2025-x9a7b/actas..."
           aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
             --exclude "*" \
             --include "*.pdf" \
             --content-type "application/pdf" \
             --content-disposition "attachment"
-
-          echo "✅ PDF upload complete!"

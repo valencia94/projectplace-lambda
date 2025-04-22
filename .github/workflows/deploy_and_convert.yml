@@ -32,14 +32,35 @@ jobs:
           docker tag projectplace-lambda:latest 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
           docker push 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
 
-      - name: 🚀 Update Lambda function code
+      - name: 🚀 Update Lambda function code (safe retry)
         run: |
+          for i in {1..5}; do
+            echo "Attempt $i: Checking if Lambda update is in progress..."
+            STATUS=$(aws lambda get-function \
+              --function-name ProjectPlaceDataExtractor \
+              --region us-east-2 \
+              --query 'Configuration.LastUpdateStatus' \
+              --output text)
+
+            if [ "$STATUS" = "Successful" ]; then
+              echo "✅ Safe to proceed."
+              break
+            elif [ "$STATUS" = "InProgress" ]; then
+              echo "⏳ Update still in progress. Waiting..."
+              sleep 15
+            else
+              echo "❌ Unexpected update status: $STATUS"
+              exit 1
+            fi
+          done
+
+          echo "📦 Updating Lambda code..."
           aws lambda update-function-code \
             --function-name ProjectPlaceDataExtractor \
             --image-uri 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest \
             --region us-east-2
 
-      - name: ⏳ Wait for Lambda code update to finish
+      - name: ⏳ Wait for Lambda update to complete
         run: |
           aws lambda wait function-updated \
             --function-name ProjectPlaceDataExtractor \
@@ -71,13 +92,12 @@ jobs:
             --region us-east-2 \
             --environment file://tmp_env.json
 
-      - name: ⏳ Wait for environment update to finish
+      - name: ⏳ Wait for environment config to complete
         run: |
           aws lambda wait function-updated \
             --function-name ProjectPlaceDataExtractor \
             --region us-east-2
 
-      # ✅ Synchronous Invocation
       - name: 🏁 Invoke Lambda and wait for completion
         run: |
           aws lambda invoke \
@@ -86,7 +106,7 @@ jobs:
             --payload '{}' \
             --cli-binary-format raw-in-base64-out \
             out.json
-          echo "✅ Lambda finished. Contents:"
+          echo "✅ Lambda complete. Output:"
           cat out.json
 
   convert-docx:
@@ -112,11 +132,12 @@ jobs:
       - name: 📥 Download all .docx from S3
         run: |
           mkdir -p actas
+          echo "Syncing .docx from S3..."
           aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas --exclude "*" --include "*.docx"
-          ls -l actas
+
           COUNT_DOCX=$(ls -1 actas/*.docx 2>/dev/null | wc -l)
           if [ "$COUNT_DOCX" -eq 0 ]; then
-            echo "No .docx files found in 'actas'!"
+            echo "No .docx files found."
             exit 1
           fi
 
@@ -127,7 +148,7 @@ jobs:
             libreoffice --headless --convert-to pdf "$f"
           done
 
-      - name: 🚀 Upload .pdf back to S3
+      - name: 🚀 Upload PDFs to S3
         run: |
           aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
             --exclude "*" \

@@ -88,16 +88,30 @@ jobs:
             --function-name ProjectPlaceDataExtractor \
             --region us-east-2
 
-      - name: 🏁 Invoke Lambda and wait for completion
+      - name: 🏁 Invoke Lambda Asynchronously
         run: |
           aws lambda invoke \
             --function-name ProjectPlaceDataExtractor \
             --region us-east-2 \
             --payload '{}' \
-            --cli-binary-format raw-in-base64-out \
-            out.json
-          echo "✅ Lambda complete. Output:"
-          cat out.json
+            --invocation-type Event \
+            out.json \
+            --cli-binary-format raw-in-base64-out
+          echo "✅ Lambda triggered. Now waiting for Acta generation..."
+
+      - name: ⌛ Wait for .done marker in S3
+        run: |
+          echo "⏳ Waiting for S3 marker file: s3://projectplace-dv-2025-x9a7b/actas/.done"
+          for i in {1..30}; do
+            aws s3 ls s3://projectplace-dv-2025-x9a7b/actas/.done && break
+            echo "🔁 Attempt $i: Marker not found. Sleeping 20s..."
+            sleep 20
+            if [ "$i" -eq 30 ]; then
+              echo "❌ Timeout waiting for .done marker."
+              exit 1
+            fi
+          done
+          echo "✅ .done marker detected. Proceeding."
 
   convert-docx:
     runs-on: ubuntu-latest
@@ -119,14 +133,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libreoffice
 
-      - name: 📥 Download all .docx from S3 and confirm freshness
+      - name: 📥 Download all .docx from S3
         run: |
           mkdir -p actas
-          echo "📥 Syncing .docx files from S3..."
+          echo "📥 Syncing .docx from S3..."
           aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas --exclude "*" --include "*.docx"
-          echo "📂 File timestamps:"
-          find actas -type f -name "*.docx" -exec stat -c "%y %n" {} \; | sort -r | head -n 5
-
           COUNT_DOCX=$(ls -1 actas/*.docx 2>/dev/null | wc -l)
           if [ "$COUNT_DOCX" -eq 0 ]; then
             echo "❌ No .docx files found!"
@@ -137,13 +148,12 @@ jobs:
         run: |
           cd actas
           for f in *.docx; do
-            echo "🖨 Converting $f..."
             libreoffice --headless --convert-to pdf "$f"
           done
 
       - name: 🚀 Upload PDFs to S3
         run: |
-          echo "🚀 Uploading PDFs to S3..."
+          echo "🚀 Uploading PDFs..."
           aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
             --exclude "*" \
             --include "*.pdf" \

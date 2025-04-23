@@ -372,8 +372,8 @@ def build_acta_for_project(pid, project_df):
     add_top_header_table(doc, "ACTA DE SEGUIMIENTO", LOGO_IMAGE_PATH)
     doc.add_paragraph()
 
-    from datetime import timedelta
-    date_now = (datetime.now() - timedelta(hours=5)).strftime("%m/%d/%Y")
+    date_now = datetime.now().strftime("%m/%d/%Y")
+    date_text = f"FECHA DEL ACTA: {date_now}"
     add_two_by_two_table(doc, date_text, project_name, str(pid), leader_name, shade_color=LIGHT_SHADE_2X2)
 
     doc.add_paragraph()

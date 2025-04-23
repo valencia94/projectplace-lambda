@@ -104,24 +104,34 @@ def lambda_handler(event, context):
     for pid, project_df in grouped:
         # doc.save(...) is synchronous
         doc_path = build_acta_for_project(pid, project_df)
-        if doc_path:
-            doc_count += 1
-            # Upload doc
-            first_row = project_df.iloc[0]
-            p_name = str(first_row.get("project_name", "UnknownProject"))
-            safe_proj = p_name.replace("/", "_").replace(" ", "_")
-            s3_key_docx = f"actas/Acta_{safe_proj}_{pid}.docx"
-            upload_file_to_s3(doc_path, s3_key_docx)
+     if doc_path:
+         doc_count += 1
 
-            # (OPTIONAL) Convert to PDF and upload
-            try:
-                pdf_path = convert_docx_to_pdf(doc_path)
-                if pdf_path:
-                    # e.g. "actas/Acta_ProjectName_1234.pdf"
-                    s3_key_pdf = f"actas/Acta_{safe_proj}_{pid}.pdf"
-                    upload_file_to_s3(pdf_path, s3_key_pdf)
-            except Exception as exc:
-                logger.error(f"PDF conversion failed for doc {doc_path}: {exc}")
+         first_row = project_df.iloc[0]
+         p_name = str(first_row.get("project_name", "UnknownProject"))
+         safe_proj = p_name.replace("/", "_").replace(" ", "_")
+
+-        s3_key_docx = f"actas/Acta_{safe_proj}_{pid}.docx"
+-        upload_file_to_s3(doc_path, s3_key_docx)
++        # ── begin date-prefix patch ──────────────────────────────────────────────────
++        date_prefix     = datetime.now().strftime("%m%d%Y")
++        s3_key_docx     = f"actas/{date_prefix}_Acta_{safe_proj}_{pid}.docx"
++        upload_file_to_s3(doc_path, s3_key_docx)
++        # ── end date-prefix patch ───────────────────────────────────────────────────
+
+         # (OPTIONAL) Convert to PDF and upload
+         try:
+-            pdf_path = convert_docx_to_pdf(doc_path)
+-            if pdf_path:
+-                s3_key_pdf = f"actas/Acta_{safe_proj}_{pid}.pdf"
+-                upload_file_to_s3(pdf_path, s3_key_pdf)
++            pdf_path = convert_docx_to_pdf(doc_path)
++            if pdf_path:
++                # keep the same date prefix for the PDF
++                s3_key_pdf = f"actas/{date_prefix}_Acta_{safe_proj}_{pid}.pdf"
++                upload_file_to_s3(pdf_path, s3_key_pdf)
+         except Exception as exc:
+             logger.error(f"PDF conversion failed for doc {doc_path}: {exc}")
 
     # 8) Upload Excel as well
     s3_excel_key = "actas/Acta_de_Seguimiento.xlsx"

@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch: {}  # Manual “Run workflow” trigger
+  workflow_dispatch: {}
 
 jobs:
   deploy-lambda:
@@ -23,8 +23,8 @@ jobs:
 
       - name: 🐳 Login to Amazon ECR
         run: |
-          aws ecr get-login-password --region us-east-2 \
-            | docker login --username AWS --password-stdin \
+          aws ecr get-login-password --region us-east-2 | \
+            docker login --username AWS --password-stdin \
               703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
 
       - name: 🛠 Build and push Docker image to ECR
@@ -103,6 +103,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-2
 
+      - name: 🗓️ Set DATE_PREFIX
+        run: echo "DATE_PREFIX=$(date +%m%d%Y)" >> $GITHUB_ENV
+
       - name: 🏗 Install LibreOffice
         run: |
           sudo apt-get update
@@ -110,17 +113,16 @@ jobs:
 
       - name: 📥 Wait & download today’s .docx from S3
         run: |
-          TODAY=$(date +%m%d%Y)
           mkdir -p actas
 
           for i in {1..15}; do
-            echo "⏳ Attempt $i: checking for ${TODAY}_*.docx in S3..."
+            echo "⏳ Attempt $i: checking for ${{ env.DATE_PREFIX }}_*.docx in S3..."
             aws s3 sync \
               s3://projectplace-dv-2025-x9a7b/actas actas \
-              --exclude "*" --include "${TODAY}_*.docx" \
+              --exclude "*" --include "${{ env.DATE_PREFIX }}_*.docx" \
               --delete
 
-            COUNT=$(ls -1 actas/${TODAY}_*.docx 2>/dev/null | wc -l)
+            COUNT=$(ls -1 actas/${{ env.DATE_PREFIX }}_*.docx 2>/dev/null | wc -l)
             if [ "$COUNT" -gt 0 ]; then
               echo "✅ Found $COUNT file(s). Proceeding."
               break
@@ -139,22 +141,21 @@ jobs:
         run: |
           cd actas
           echo "Listing files to convert:"
-          ls -l ${TODAY}_*.docx
+          ls -l ${{ env.DATE_PREFIX }}_*.docx
 
-          for f in ${TODAY}_*.docx; do
+          for f in ${{ env.DATE_PREFIX }}_*.docx; do
             echo "Converting '$f' to PDF..."
             libreoffice --headless --convert-to pdf "$f"
           done
 
           echo "Conversion done. PDFs:"
-          ls -l ${TODAY}_*.pdf
+          ls -l ${{ env.DATE_PREFIX }}_*.pdf
 
       - name: 🚀 Upload .pdf back to S3
         run: |
-          TODAY=$(date +%m%d%Y)
           echo "Syncing PDFs -> s3://projectplace-dv-2025-x9a7b/actas..."
           aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
-            --exclude "*" --include "${TODAY}_*.pdf" \
+            --exclude "*" --include "${{ env.DATE_PREFIX }}_*.pdf" \
             --content-type "application/pdf" \
             --content-disposition "attachment"
 

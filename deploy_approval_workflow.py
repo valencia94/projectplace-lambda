@@ -1,4 +1,3 @@
-# trigeer deploy attempt 
 #!/usr/bin/env python3
 
 import os
@@ -25,11 +24,13 @@ def create_zip(source_file, zip_name):
     os.makedirs(ZIP_DIR, exist_ok=True)
     zip_path = os.path.join(ZIP_DIR, zip_name)
     with zipfile.ZipFile(zip_path, 'w') as zipf:
-for root, dirs, files in os.walk("approval"):
-    for file in files:
-        filepath = os.path.join(root, file)
-        zipf.write(filepath, arcname=os.path.relpath(filepath, "approval"))
-zipf.write(source_file, arcname=os.path.basename(source_file))
+        # Add the entire "approval/" folder and its files
+        for root, dirs, files in os.walk("approval"):
+            for file in files:
+                filepath = os.path.join(root, file)
+                zipf.write(filepath, arcname=os.path.relpath(filepath, start="approval"))
+        # Add the main Lambda handler
+        zipf.write(source_file, arcname=os.path.basename(source_file))
     return zip_path
 
 def deploy_lambda(lambda_name, zip_path, handler_name, env_vars):
@@ -122,4 +123,3 @@ if __name__ == "__main__":
     print("🌐 Creating or confirming API Gateway...")
     api_id = create_api_gateway()
     print(f"✅ Deployment complete | API Gateway ID: {api_id}")
-

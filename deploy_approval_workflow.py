@@ -1,4 +1,3 @@
-# ready for Triggering deployment 3rd attempt
 #!/usr/bin/env python3
 
 import os
@@ -8,6 +7,9 @@ import json
 
 REGION = os.environ.get("AWS_REGION")
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID")
+if not ACCOUNT_ID:
+    raise Exception("AWS_ACCOUNT_ID environment variable not set.")
+
 LAMBDA_ROLE = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectPlaceLambdaRole"
 TABLE_NAME = "ProjectPlace_DataExtrator_landing_table_v3"
 SES_EMAIL = "noreply@notifications.cvdextech.com"
@@ -33,15 +35,17 @@ def deploy_lambda(lambda_name, zip_path, handler_name, env_vars):
         zipped_code = f.read()
 
     try:
+        print(f"Checking if Lambda {lambda_name} exists...")
         client.get_function(FunctionName=lambda_name)
-        print(f"Updating Lambda: {lambda_name}")
+        print(f"Updating existing Lambda: {lambda_name}")
         client.update_function_code(FunctionName=lambda_name, ZipFile=zipped_code)
         client.update_function_configuration(
             FunctionName=lambda_name,
             Environment={"Variables": env_vars}
         )
     except client.exceptions.ResourceNotFoundException:
-        print(f"Creating Lambda: {lambda_name}")
+        print(f"Creating new Lambda: {lambda_name}")
+        print(f"Using IAM Role ARN: {LAMBDA_ROLE}")
         client.create_function(
             FunctionName=lambda_name,
             Runtime="python3.9",
@@ -115,3 +119,4 @@ if __name__ == "__main__":
     print("🌐 Creating or confirming API Gateway...")
     api_id = create_api_gateway()
     print(f"✅ Deployment complete | API Gateway ID: {api_id}")
+

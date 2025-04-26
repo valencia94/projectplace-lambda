@@ -1,4 +1,4 @@
-# trigeer deploy
+# trigeer deploy attempt 
 #!/usr/bin/env python3
 
 import os

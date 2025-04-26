@@ -1,11 +1,12 @@
-# test 
 #!/usr/bin/env python3
 
 import os
 import boto3
 import zipfile
 import json
+import time  # <--- Added here for sleep timing control
 
+# Environment variables
 REGION = os.environ.get("AWS_REGION")
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID")
 if not ACCOUNT_ID:
@@ -21,19 +22,21 @@ ZIP_DIR = "./deployment_zips"
 SEND_EMAIL_FN = "sendApprovalEmail"
 HANDLE_CB_FN = "handleApprovalCallback"
 
+# --- Create ZIP function ---
 def create_zip(source_file, zip_name):
     os.makedirs(ZIP_DIR, exist_ok=True)
     zip_path = os.path.join(ZIP_DIR, zip_name)
     with zipfile.ZipFile(zip_path, 'w') as zipf:
-        # Add the entire "approval/" folder and its files
+        # Add all files from "approval" folder
         for root, dirs, files in os.walk("approval"):
             for file in files:
                 filepath = os.path.join(root, file)
                 zipf.write(filepath, arcname=os.path.relpath(filepath, start="approval"))
-        # Add the main Lambda handler
+        # Add main Lambda handler
         zipf.write(source_file, arcname=os.path.basename(source_file))
     return zip_path
 
+# --- Deploy Lambda function ---
 def deploy_lambda(lambda_name, zip_path, handler_name, env_vars):
     client = boto3.client("lambda", region_name=REGION)
     with open(zip_path, 'rb') as f:
@@ -44,6 +47,11 @@ def deploy_lambda(lambda_name, zip_path, handler_name, env_vars):
         client.get_function(FunctionName=lambda_name)
         print(f"Updating existing Lambda: {lambda_name}")
         client.update_function_code(FunctionName=lambda_name, ZipFile=zipped_code)
+
+        # Wait for AWS Lambda update to finalize
+        print(f"Waiting for AWS to finalize code update for {lambda_name}...")
+        time.sleep(30)
+
         client.update_function_configuration(
             FunctionName=lambda_name,
             Environment={"Variables": env_vars}
@@ -62,6 +70,7 @@ def deploy_lambda(lambda_name, zip_path, handler_name, env_vars):
             Environment={"Variables": env_vars}
         )
 
+# --- Create API Gateway ---
 def create_api_gateway():
     apig = boto3.client("apigateway", region_name=REGION)
     lambd = boto3.client("lambda", region_name=REGION)
@@ -105,6 +114,7 @@ def create_api_gateway():
     print("API Gateway /approve endpoint created.")
     return api['id']
 
+# --- Main Execution ---
 if __name__ == "__main__":
     print("📦 Creating deployment ZIPs...")
     zip_send = create_zip("approval/sendApprovalEmail.py", "sendApprovalEmail.zip")

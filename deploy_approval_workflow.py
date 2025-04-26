@@ -1,4 +1,4 @@
-# Triggering deployment
+# ready for Triggering deployment
 #!/usr/bin/env python3
 
 import os

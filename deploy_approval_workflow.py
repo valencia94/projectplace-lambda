@@ -11,7 +11,7 @@ ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID")
 if not ACCOUNT_ID:
     raise Exception("AWS_ACCOUNT_ID environment variable not set.")
 
-LAMBDA_ROLE = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectPlaceLambdaRole"
+LAMBDA_ROLE = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectplaceLambdaRole"
 TABLE_NAME = "ProjectPlace_DataExtrator_landing_table_v3"
 SES_EMAIL = "noreply@notifications.cvdextech.com"
 S3_BUCKET = os.environ.get("S3_BUCKET_NAME")

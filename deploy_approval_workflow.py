@@ -28,11 +28,19 @@ def create_zip(source_file, zip_name):
     zip_path = os.path.join(ZIP_DIR, zip_name)
 
     with zipfile.ZipFile(zip_path, 'w') as zipf:
+        # Include approval/ folder
         for root, dirs, files in os.walk("approval"):
             for file in files:
                 filepath = os.path.join(root, file)
                 zipf.write(filepath, arcname=os.path.relpath(filepath, start="."))
 
+        # Include config/ folder
+        for root, dirs, files in os.walk("config"):
+            for file in files:
+                filepath = os.path.join(root, file)
+                zipf.write(filepath, arcname=os.path.relpath(filepath, start="."))
+
+        # Add the main Lambda handler
         zipf.write(source_file, arcname=os.path.basename(source_file))
 
     return zip_path
@@ -51,7 +59,7 @@ def deploy_lambda(lambda_name, zip_path, handler_name, env_vars):
 
         # Wait for AWS Lambda update to finalize
         print(f"Waiting for AWS to finalize code update for {lambda_name}...")
-        time.sleep(30)
+        time.sleep(120)
 
         client.update_function_configuration(
             FunctionName=lambda_name,

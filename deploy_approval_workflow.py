@@ -4,7 +4,7 @@ import os
 import boto3
 import zipfile
 import json
-import time  # <--- Added here for sleep timing control
+import time
 
 # Environment variables
 REGION = os.environ.get("AWS_REGION")
@@ -22,21 +22,22 @@ ZIP_DIR = "./deployment_zips"
 SEND_EMAIL_FN = "sendApprovalEmail"
 HANDLE_CB_FN = "handleApprovalCallback"
 
-# --- Create ZIP function ---
+# --- Create ZIP package ---
 def create_zip(source_file, zip_name):
     os.makedirs(ZIP_DIR, exist_ok=True)
     zip_path = os.path.join(ZIP_DIR, zip_name)
+
     with zipfile.ZipFile(zip_path, 'w') as zipf:
-        # Add all files from "approval" folder
         for root, dirs, files in os.walk("approval"):
             for file in files:
                 filepath = os.path.join(root, file)
-                zipf.write(filepath, arcname=os.path.relpath(filepath, start="approval"))
-        # Add main Lambda handler
+                zipf.write(filepath, arcname=os.path.relpath(filepath, start="."))
+
         zipf.write(source_file, arcname=os.path.basename(source_file))
+
     return zip_path
 
-# --- Deploy Lambda function ---
+# --- Deploy Lambda ---
 def deploy_lambda(lambda_name, zip_path, handler_name, env_vars):
     client = boto3.client("lambda", region_name=REGION)
     with open(zip_path, 'rb') as f:

@@ -6,6 +6,8 @@ import zipfile
 import json
 import sys
 
+RESERVED_KEYS = ["AWS_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
+
 # --------- ENV VALIDATION ---------
 def require_env(key):
     val = os.getenv(key)
@@ -13,6 +15,13 @@ def require_env(key):
         print(f"❌ Missing required environment variable: {key}")
         sys.exit(1)
     return val
+
+def validate_env(vars_dict):
+    for key in vars_dict.keys():
+        if key in RESERVED_KEYS:
+            print(f"❌ ERROR: '{key}' is a reserved AWS key and cannot be used in Lambda env variables.")
+            sys.exit(1)
+    print("✅ Environment variable validation passed.")
 
 REGION = require_env("AWS_REGION")
 ACCOUNT_ID = require_env("AWS_ACCOUNT_ID")
@@ -25,7 +34,6 @@ LAMBDA_NAME = "projectMetadataEnricher"
 HANDLER_NAME = "project_metadata_enricher.lambda_handler"
 SOURCE_FILE = "approval/project_metadata_enricher.py"
 
-# --------- ZIP PACKAGE CREATION ---------
 def create_zip():
     os.makedirs(ZIP_DIR, exist_ok=True)
     zip_path = os.path.join(ZIP_DIR, f"{LAMBDA_NAME}.zip")
@@ -34,11 +42,16 @@ def create_zip():
     print(f"📦 Created zip at: {zip_path}")
     return zip_path
 
-# --------- LAMBDA DEPLOYMENT ---------
 def deploy_lambda(zip_path):
     client = boto3.client("lambda", region_name=REGION)
     with open(zip_path, 'rb') as f:
         zipped_code = f.read()
+
+    env_vars = {
+        "DYNAMODB_TABLE_NAME": TABLE_NAME,
+        "PROJECTPLACE_SECRET_NAME": SECRET_NAME
+    }
+    validate_env(env_vars)
 
     try:
         client.get_function(FunctionName=LAMBDA_NAME)
@@ -46,12 +59,8 @@ def deploy_lambda(zip_path):
         client.update_function_code(FunctionName=LAMBDA_NAME, ZipFile=zipped_code)
         client.update_function_configuration(
             FunctionName=LAMBDA_NAME,
-            Environment={
-                "Variables": {
-                    "DYNAMODB_TABLE_NAME": TABLE_NAME,
-                    "PROJECTPLACE_SECRET_NAME": SECRET_NAME
-                }
-            }
+            Environment={"Variables": env_vars}
+        )
     except client.exceptions.ResourceNotFoundException:
         print(f"🆕 Creating new Lambda: {LAMBDA_NAME}")
         client.create_function(
@@ -62,16 +71,9 @@ def deploy_lambda(zip_path):
             Code={"ZipFile": zipped_code},
             Timeout=60,
             MemorySize=256,
-            Environment={
-                "Variables": {
-                    "AWS_REGION": REGION,
-                    "DYNAMODB_TABLE_NAME": TABLE_NAME,
-                    "PROJECTPLACE_SECRET_NAME": SECRET_NAME
-                }
-            }
+            Environment={"Variables": env_vars}
         )
 
-# --------- MAIN RUN ---------
 if __name__ == "__main__":
     print("🚀 Starting deployment for projectMetadataEnricher...")
     zip_path = create_zip()

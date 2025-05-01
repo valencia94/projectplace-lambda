@@ -27,4 +27,6 @@ jobs:
         env:
           AWS_REGION: us-east-2
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          DYNAMODB_TABLE_NAME: ProjectPlace_DataExtrator_landing_table_v3
+          PROJECTPLACE_SECRET_NAME: ProjectPlaceAPICredentials
         run: python3 project_metadata_enricher.py

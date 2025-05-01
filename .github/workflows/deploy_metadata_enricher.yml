@@ -1,4 +1,4 @@
-name: Deploy Metadata Enricher
+name: Deploy projectMetadataEnricher
 
 on:
   workflow_dispatch:
@@ -16,18 +16,15 @@ jobs:
         with:
           python-version: 3.9
 
-      - name: 📦 Install Dependencies
-        run: pip install boto3
-
       - name: 🔐 Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: us-east-2
 
       - name: 🚀 Deploy Metadata Enricher Lambda
         env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_REGION: us-east-2
           AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-        run: python scripts/deploy_metadata_enricher.py
+        run: python3 project_metadata_enricher.py

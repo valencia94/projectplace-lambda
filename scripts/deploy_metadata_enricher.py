@@ -16,14 +16,12 @@ LAMBDA_NAME = "projectMetadataEnricher"
 HANDLER_NAME = "project_metadata_enricher.lambda_handler"
 SOURCE_FILE = "approval/project_metadata_enricher.py"
 
-
 def create_zip():
     os.makedirs(ZIP_DIR, exist_ok=True)
     zip_path = os.path.join(ZIP_DIR, f"{LAMBDA_NAME}.zip")
     with zipfile.ZipFile(zip_path, 'w') as zipf:
         zipf.write(SOURCE_FILE, arcname=os.path.basename(SOURCE_FILE))
     return zip_path
-
 
 def deploy_lambda(zip_path):
     client = boto3.client("lambda", region_name=REGION)
@@ -38,7 +36,6 @@ def deploy_lambda(zip_path):
             FunctionName=LAMBDA_NAME,
             Environment={
                 "Variables": {
-                    "AWS_REGION": REGION,
                     "DYNAMODB_TABLE_NAME": TABLE_NAME,
                     "PROJECTPLACE_SECRET_NAME": SECRET_NAME
                 }
@@ -56,13 +53,11 @@ def deploy_lambda(zip_path):
             MemorySize=256,
             Environment={
                 "Variables": {
-                    "AWS_REGION": REGION,
                     "DYNAMODB_TABLE_NAME": TABLE_NAME,
                     "PROJECTPLACE_SECRET_NAME": SECRET_NAME
                 }
             }
         )
-
 
 if __name__ == "__main__":
     print("📦 Creating deployment ZIP...")

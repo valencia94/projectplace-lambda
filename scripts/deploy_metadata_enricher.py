@@ -48,12 +48,10 @@ def deploy_lambda(zip_path):
             FunctionName=LAMBDA_NAME,
             Environment={
                 "Variables": {
-                    "AWS_REGION": REGION,
                     "DYNAMODB_TABLE_NAME": TABLE_NAME,
                     "PROJECTPLACE_SECRET_NAME": SECRET_NAME
                 }
             }
-        )
     except client.exceptions.ResourceNotFoundException:
         print(f"🆕 Creating new Lambda: {LAMBDA_NAME}")
         client.create_function(

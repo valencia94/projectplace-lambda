@@ -16,6 +16,9 @@ jobs:
         with:
           python-version: 3.9
 
+      - name: 🧰 Install Dependencies
+        run: pip install boto3
+
       - name: 🔐 Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -30,5 +33,3 @@ jobs:
           DYNAMODB_TABLE_NAME: ProjectPlace_DataExtrator_landing_table_v3
           PROJECTPLACE_SECRET_NAME: ProjectPlaceAPICredentials
         run: python3 scripts/deploy_metadata_enricher.py
-
-

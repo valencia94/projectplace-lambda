@@ -5,7 +5,7 @@ import json
 import time
 from datetime import datetime
 from uuid import uuid4
-import base64
+from collections import defaultdict
 
 REGION = os.environ.get("AWS_REGION")
 TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME")
@@ -42,60 +42,65 @@ def get_pm_email(project_id, token, creator_id):
         print(f"[ERROR] Fetching PM email: {str(e)}")
     return None
 
-def lambda_handler(event, context):
-    project_id = event.get("project_id")
-    if not project_id:
-        print("[ERROR] Missing project_id")
-        return {"statusCode": 400, "body": "Missing project_id"}
-
-    print(f"[START] Enriching project_id: {project_id}")
-
+def lambda_handler(event=None, context=None):
+    print("🚀 Starting full metadata enrichment...")
     token = get_projectplace_token()
     if not token:
         return {"statusCode": 500, "body": "Failed to get API token"}
 
-    result = table.query(
-        KeyConditionExpression=boto3.dynamodb.conditions.Key("project_id").eq(project_id)
-    )
+    try:
+        response = table.scan()
+        items = response.get("Items", [])
+    except Exception as e:
+        print(f"[ERROR] Scanning table: {str(e)}")
+        return {"statusCode": 500, "body": "Failed to scan DynamoDB"}
 
-    if not result["Items"]:
-        return {"statusCode": 404, "body": "No items found for project_id"}
+    if not items:
+        return {"statusCode": 404, "body": "No records to enrich"}
 
-    for item in result["Items"]:
-        card_id = item.get("card_id")
-        creator = item.get("creator")
-        client_email = None
+    # Group cards by project_id
+    grouped = defaultdict(list)
+    for item in items:
+        if "project_id" in item:
+            grouped[item["project_id"]].append(item)
 
-        if item.get("title") == "Client_Email":
-            comments = item.get("comments")
-            if comments and isinstance(comments, list):
-                client_email = comments[0]
+    for project_id, cards in grouped.items():
+        print(f"🔄 Enriching project: {project_id}")
+        for item in cards:
+            card_id = item.get("card_id")
+            creator = item.get("creator")
+            client_email = None
 
-        creator_id = None
-        try:
-            creator_data = json.loads(creator.replace("'", '"')) if creator else {}
-            creator_id = creator_data.get("id")
-        except:
-            pass
+            if item.get("title") == "Client_Email":
+                comments = item.get("comments")
+                if comments and isinstance(comments, list):
+                    client_email = comments[0]
 
-        pm_email = get_pm_email(project_id, token, creator_id) if creator_id else None
+            creator_id = None
+            try:
+                creator_data = json.loads(creator.replace("'", '"')) if creator else {}
+                creator_id = creator_data.get("id")
+            except:
+                pass
 
-        try:
-            table.update_item(
-                Key={"project_id": project_id, "card_id": card_id},
-                UpdateExpression="SET client_email = :ce, pm_email = :pe, approval_token = :at, sent_timestamp = :ts, #s = :st",
-                ExpressionAttributeNames={"#s": "status"},
-                ExpressionAttributeValues={
-                    ":ce": client_email or "",
-                    ":pe": pm_email or "",
-                    ":at": str(uuid4()),
-                    ":ts": int(time.time()),
-                    ":st": "pending"
-                }
-            )
-            print(f"[UPDATED] card_id: {card_id} with PM and client emails")
-        except Exception as e:
-            print(f"[ERROR] Updating card_id {card_id}: {str(e)}")
+            pm_email = get_pm_email(project_id, token, creator_id) if creator_id else None
 
-    print(f"[COMPLETE] Metadata enrichment finished for {project_id}")
-    return {"statusCode": 200, "body": "Metadata enrichment completed."}
+            try:
+                table.update_item(
+                    Key={"project_id": project_id, "card_id": card_id},
+                    UpdateExpression="SET client_email = :ce, pm_email = :pe, approval_token = :at, sent_timestamp = :ts, #s = :st",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={
+                        ":ce": client_email or "",
+                        ":pe": pm_email or "",
+                        ":at": str(uuid4()),
+                        ":ts": int(time.time()),
+                        ":st": "pending"
+                    }
+                )
+                print(f"✅ Updated card_id: {card_id} in project {project_id}")
+            except Exception as e:
+                print(f"[ERROR] Updating card_id {card_id}: {str(e)}")
+
+    print("✅ Enrichment complete for all projects.")
+    return {"statusCode": 200, "body": "Enrichment completed for all projects."}

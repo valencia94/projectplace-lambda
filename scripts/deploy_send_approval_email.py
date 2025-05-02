@@ -73,6 +73,12 @@ def deploy_lambda(zip_path):
         client.get_function(FunctionName=LAMBDA_NAME)
         print(f"🔁 Updating existing Lambda: {LAMBDA_NAME}")
         client.update_function_code(FunctionName=LAMBDA_NAME, ZipFile=zipped_code)
+
+        # ✅ Wait for Lambda code update to complete
+        print("⏳ Waiting for Lambda code update to complete...")
+        client.get_waiter("function_updated").wait(FunctionName=LAMBDA_NAME)
+        print("✅ Lambda code update confirmed.")
+
         client.update_function_configuration(FunctionName=LAMBDA_NAME, Environment={"Variables": env_vars})
     except client.exceptions.ResourceNotFoundException:
         print(f"🆕 Creating new Lambda: {LAMBDA_NAME}")

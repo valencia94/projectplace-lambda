@@ -16,7 +16,7 @@ def require_env(key):
 
 REGION = require_env("AWS_REGION")
 ACCOUNT_ID = require_env("AWS_ACCOUNT_ID")
-LAMBDA_ROLE = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectPlaceLambdaRole"
+LAMBDA_ROLE = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectplaceLambdaRole"
 TABLE_NAME = require_env("DYNAMODB_TABLE_NAME")
 SECRET_NAME = require_env("PROJECTPLACE_SECRET_NAME")
 ZIP_DIR = "./deployment_zips"

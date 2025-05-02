@@ -1,6 +1,8 @@
 name: Deploy Approval Workflow
 
 on:
+  workflow_dispatch:  # ✅ This enables the 'Run workflow' button
+
   push:
     paths:
       - 'scripts/deploy_send_approval_email.py'

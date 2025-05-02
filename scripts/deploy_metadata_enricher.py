@@ -36,7 +36,7 @@ def validate_iam_role(role_arn):
 
 REGION = require_env("AWS_REGION")
 ACCOUNT_ID = require_env("AWS_ACCOUNT_ID")
-LAMBDA_ROLE = "arn:aws:iam::703671891952:role/service-role/ProjectPlaceLambdaRole"
+LAMBDA_ROLE = "arn:aws:iam::703671891952:role/ProjectplaceLambdaRole"
 TABLE_NAME = require_env("DYNAMODB_TABLE_NAME")
 SECRET_NAME = require_env("PROJECTPLACE_SECRET_NAME")
 ZIP_DIR = "./deployment_zips"

@@ -3,7 +3,6 @@
 import os
 import boto3
 import zipfile
-import json
 import sys
 import time
 
@@ -18,29 +17,28 @@ def require_env(key):
     return val
 
 def validate_env(vars_dict):
-    for key in vars_dict.keys():
+    for key in vars_dict:
         if key in RESERVED_KEYS:
             print(f"❌ ERROR: '{key}' is a reserved AWS key and cannot be used in Lambda env variables.")
             sys.exit(1)
     print("✅ Environment variable validation passed.")
 
-def validate_iam_role(role_arn):
+def get_role_arn(role_name):
     iam = boto3.client("iam")
-    role_name = role_arn.split("/")[-1]
     try:
-        response = iam.get_role(RoleName=role_name)
+        role = iam.get_role(RoleName=role_name)
         print(f"✅ IAM role found: {role_name}")
+        return role["Role"]["Arn"]
     except iam.exceptions.NoSuchEntityException:
-        print(f"❌ IAM role not found: {role_name}")
+        print(f"❌ IAM role does not exist: {role_name}")
         sys.exit(1)
 
+# --------- CONFIG ---------
 REGION = require_env("AWS_REGION")
 ACCOUNT_ID = require_env("AWS_ACCOUNT_ID")
-LAMBDA_ROLE = "arn:aws:iam::703671891952:role/ProjectplaceLambdaRole"
-TABLE_NAME = require_env("DYNAMODB_TABLE_NAME")
-SECRET_NAME = require_env("PROJECTPLACE_SECRET_NAME")
+ROLE_NAME = "ProjectplaceLambdaRole"
+LAMBDA_ROLE = get_role_arn(ROLE_NAME)
 ZIP_DIR = "./deployment_zips"
-
 LAMBDA_NAME = "projectMetadataEnricher"
 HANDLER_NAME = "project_metadata_enricher.lambda_handler"
 SOURCE_FILE = "approval/project_metadata_enricher.py"
@@ -54,14 +52,13 @@ def create_zip():
     return zip_path
 
 def deploy_lambda(zip_path):
-    validate_iam_role(LAMBDA_ROLE)
     client = boto3.client("lambda", region_name=REGION)
     with open(zip_path, 'rb') as f:
         zipped_code = f.read()
 
     env_vars = {
-        "DYNAMODB_TABLE_NAME": TABLE_NAME,
-        "PROJECTPLACE_SECRET_NAME": SECRET_NAME
+        "DYNAMODB_TABLE_NAME": require_env("DYNAMODB_TABLE_NAME"),
+        "PROJECTPLACE_SECRET_NAME": require_env("PROJECTPLACE_SECRET_NAME")
     }
     validate_env(env_vars)
 
@@ -69,10 +66,16 @@ def deploy_lambda(zip_path):
         client.get_function(FunctionName=LAMBDA_NAME)
         print(f"🔁 Updating existing Lambda: {LAMBDA_NAME}")
         client.update_function_code(FunctionName=LAMBDA_NAME, ZipFile=zipped_code)
+
+        # ✅ Wait for code update to finish before applying configuration
+        print("⏳ Waiting for Lambda code update to complete...")
+        client.get_waiter("function_updated").wait(FunctionName=LAMBDA_NAME)
+        print("✅ Lambda code update confirmed.")
+
         client.update_function_configuration(FunctionName=LAMBDA_NAME, Environment={"Variables": env_vars})
     except client.exceptions.ResourceNotFoundException:
         print(f"🆕 Creating new Lambda: {LAMBDA_NAME}")
-        print("🕒 Waiting 15 seconds to allow IAM trust policy propagation...")
+        print("🕒 Waiting 15 seconds for IAM trust policy propagation...")
         time.sleep(15)
         client.create_function(
             FunctionName=LAMBDA_NAME,

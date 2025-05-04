@@ -80,3 +80,5 @@ aws lambda invoke \
 
 # Simulate approval click
 curl "https://<ACTA_API_ID>.execute-api.us-east-2.amazonaws.com/prod/approve?token=<TOKEN>&status=approved"
+
+Check DynamoDB record for approval_status = approved.

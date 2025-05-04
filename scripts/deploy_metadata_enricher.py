@@ -18,7 +18,6 @@ SRC_FILE    = "approval/project_metadata_enricher.py"
 ZIP_DIR     = "./deployment_zips"
 
 ENV = {
-    "AWS_REGION":            REGION,
     "DYNAMODB_TABLE_NAME":   os.environ["DYNAMODB_TABLE_NAME"],
     "PROJECTPLACE_SECRET_NAME": os.environ["PROJECTPLACE_SECRET_NAME"],
 }

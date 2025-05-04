@@ -1,0 +1,39 @@
+name: Deploy approval workflow
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with: {python-version: 3.9}
+      - run: pip install boto3
+      - uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - name: 🚀 Deploy Lambdas + API
+        id: setid
+        env:
+          AWS_REGION: us-east-2
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          S3_BUCKET_NAME: projectplace-dv-2025-x9a7b
+        run: |
+          python3 scripts/deploy_approval_workflow.py > /tmp/out.txt
+          API_ID=$(grep 'API Gateway ID:' /tmp/out.txt | awk '{print $5}')
+          echo "api_id=$API_ID" >> $GITHUB_OUTPUT
+
+      - name: 🧪 Smoke test email Lambda
+        env:
+          AWS_REGION: us-east-2
+          ACTA_API_ID: ${{ steps.setid.outputs.api_id }}
+          EMAIL_SOURCE: AutomationSolutionsCenter@cvdexinfo.com
+        run: |
+          aws lambda invoke --function-name sendApprovalEmail \
+          --payload '{"acta_id":"test-project"}' /tmp/out.json --region us-east-2
+          cat /tmp/out.json

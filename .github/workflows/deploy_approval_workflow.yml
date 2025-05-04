@@ -18,23 +18,26 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-2
 
-      # ── Deploy Lambdas & API ───────────────────────────────────────
+      # ── Deploy stack & capture API_ID ──────────────────────────────
       - name: 🚀 Deploy stack
         id: deploy
         env:
-          AWS_REGION:            us-east-2
-          AWS_ACCOUNT_ID:        ${{ secrets.AWS_ACCOUNT_ID }}
-          EMAIL_SOURCE:          AutomationSolutionsCenter@cvdexinfo.com
-          S3_BUCKET_NAME:        projectplace-dv-2025-x9a7b
-          DYNAMODB_TABLE_NAME:   ProjectPlace_DataExtrator_landing_table_v3
+          AWS_REGION:          us-east-2
+          AWS_ACCOUNT_ID:      ${{ secrets.AWS_ACCOUNT_ID }}
+          EMAIL_SOURCE:        AutomationSolutionsCenter@cvdexinfo.com
+          S3_BUCKET_NAME:      projectplace-dv-2025-x9a7b
+          DYNAMODB_TABLE_NAME: ProjectPlace_DataExtrator_landing_table_v3
         run: |
           API_ID=$(python3 - <<'PY'
-import scripts.deploy_approval_workflow as d; d.main(); print(d.last_api_id)
-PY)
+import scripts.deploy_approval_workflow as d
+d.main()
+print(d.last_api_id)
+PY
+          )
           echo "api_id=$API_ID" >> $GITHUB_OUTPUT
 
-      # ── Smoke-test sendApprovalEmail ───────────────────────────────
-      - name: 🧪 Smoke test email lambda
+      # ── Smoke test email Lambda ───────────────────────────────────
+      - name: 🧪 Smoke test sendApprovalEmail
         run: |
           aws lambda invoke \
             --function-name sendApprovalEmail \

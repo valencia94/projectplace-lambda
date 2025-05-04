@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
-"""
-…same header…
-"""
+import os, json, datetime, boto3
+from boto3.dynamodb.conditions import Key, Attr
 
-import os, datetime
-import boto3
-from boto3.dynamodb.conditions import Key
+REGION      = os.environ["AWS_REGION"]
+TABLE_NAME  = os.environ["DYNAMODB_TABLE_NAME"]
 
-AWS_REGION  = os.getenv("AWS_REGION")       or exit("❌ AWS_REGION")
-TABLE_NAME  = os.getenv("DYNAMODB_TABLE_NAME") or exit("❌ DYNAMODB_TABLE_NAME")
-API_STAGE   = os.getenv("API_STAGE","prod")
-
-ddb = boto3.resource("dynamodb", region_name=AWS_REGION).Table(TABLE_NAME)
+ddb   = boto3.resource("dynamodb", region_name=REGION)
+table = ddb.Table(TABLE_NAME)
 
 HTML = """
 <html><body style="font-family:Verdana">
@@ -24,50 +19,54 @@ def lambda_handler(event, ctx):
     qs     = event.get("queryStringParameters") or {}
     token  = qs.get("token")
     status = qs.get("status")
-    if not token or status not in ("approved","rejected"):
+
+    if not token or status not in ("approved", "rejected"):
         return {
-          "statusCode":400,
-          "headers":{"Content-Type":"text/html"},
-          "body":HTML.format(
-            title="Invalid Request",
-            msg="Missing or invalid params"
-          )
+            "statusCode": 400,
+            "headers": {"Content-Type": "text/html"},
+            "body": HTML.format(title="Invalid Request", msg="Missing or invalid parameters.")
         }
 
-    # GSI-only lookup, no scan fallback
-    resp = ddb.query(
-      IndexName="approval_token-index",
-      KeyConditionExpression=Key("approval_token").eq(token)
-    )
-    items = resp.get("Items",[])
+    try:
+        gsis = table.global_secondary_indexes or []
+        if any(i.get("IndexName") == "approval_token-index" for i in gsis):
+            res = table.query(
+                IndexName="approval_token-index",
+                KeyConditionExpression=Key("approval_token").eq(token)
+            )
+        else:
+            res = table.scan(
+                FilterExpression=Attr("approval_token").eq(token)
+            )
+    except Exception as e:
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "text/html"},
+            "body": HTML.format(title="Lookup Failed", msg=str(e))
+        }
+
+    items = res.get("Items", [])
     if not items:
         return {
-          "statusCode":404,
-          "headers":{"Content-Type":"text/html"},
-          "body":HTML.format(
-            title="Invalid Token",
-            msg="Link expired or bad"
-          )
+            "statusCode": 404,
+            "headers": {"Content-Type": "text/html"},
+            "body": HTML.format(title="Invalid Token", msg="This approval link is invalid or expired.")
         }
 
-    rec = items[0]
-    # tighten key schema: include both project_id+card_id
-    key = {"project_id": rec["project_id"], "card_id": rec["card_id"]}
+    item = items[0]
+    key  = {"project_id": item["project_id"], "card_id": item["card_id"]}
 
-    ddb.update_item(
-      Key=key,
-      UpdateExpression="SET approval_status=:s, approval_timestamp=:t",
-      ExpressionAttributeValues={
-        ":s": status,
-        ":t": datetime.datetime.utcnow().isoformat()
-      }
+    table.update_item(
+        Key=key,
+        UpdateExpression="SET approval_status = :s, approval_timestamp = :t",
+        ExpressionAttributeValues={
+            ":s": status,
+            ":t": datetime.datetime.utcnow().isoformat()
+        }
     )
 
     return {
-      "statusCode":200,
-      "headers":{"Content-Type":"text/html"},
-      "body":HTML.format(
-        title="Thank you!",
-        msg=f"Your Acta has been <b>{status}</b>."
-      )
+        "statusCode": 200,
+        "headers": {"Content-Type": "text/html"},
+        "body": HTML.format(title="Thank you!", msg=f"Your Acta has been {status}.")
     }

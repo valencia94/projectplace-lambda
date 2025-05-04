@@ -1,106 +1,103 @@
 #!/usr/bin/env python3
 """
-sendApprovalEmail.py
----------------------------------
-Sends branded Acta-approval emails with Approve / Reject links.
-• Builds HTML with dynamic token + API Gateway URL.
-• Attaches the generated PDF from S3.
-• Stores approval_token state in DynamoDB.
-
-ENV VARS REQUIRED
------------------
-AWS_REGION               e.g. us-east-2
-ACTA_API_ID              e.g. 4r0pt34gx4   (REST API id)
-EMAIL_SOURCE             AutomationSolutionsCenter@cvdexinfo.com  (verified)
-DYNAMODB_TABLE_NAME      ProjectPlace_DataExtrator_landing_table_v3
-S3_BUCKET_NAME           projectplace-dv-2025-x9a7b
+…same header…
 """
 
-import os, uuid, boto3, json
-from email.message import EmailMessage
-from boto3.dynamodb.conditions import Key
+import os, json, time, urllib.request
+from uuid import uuid4
+from collections import defaultdict
+import boto3
 
-REGION          = os.environ["AWS_REGION"]
-API_ID          = os.environ["ACTA_API_ID"]
-EMAIL_SOURCE    = os.environ["EMAIL_SOURCE"]
-TABLE_NAME      = os.environ["DYNAMODB_TABLE_NAME"]
-S3_BUCKET_NAME  = os.environ["S3_BUCKET_NAME"]
+REGION       = os.getenv("AWS_REGION") or sys.exit("❌ AWS_REGION")
+TABLE_NAME   = os.getenv("DYNAMODB_TABLE_NAME") or sys.exit("❌ DYNAMODB_TABLE_NAME")
+SECRET_NAME  = os.getenv("PROJECTPLACE_SECRET_NAME", "ProjectPlaceAPICredentials")
+API_BASE_URL = "https://api.projectplace.com"
 
-dynamodb = boto3.resource("dynamodb", region_name=REGION)
-ses      = boto3.client("ses",        region_name=REGION)
-s3       = boto3.client("s3",         region_name=REGION)
+ddb     = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
+secrets = boto3.client("secretsmanager", region_name=REGION)
 
-def lambda_handler(event, _ctx):
-    """
-    Expected event:
-    {
-      "acta_id": "100000064035182"
-    }
-    """
-    acta_id = event.get("acta_id")
-    if not acta_id:
-        return {"statusCode": 400, "body": "Missing acta_id"}
 
-    table   = dynamodb.Table(TABLE_NAME)
-    items   = table.query(KeyConditionExpression=Key("project_id").eq(acta_id))["Items"]
-    if not items:
-        return {"statusCode": 404, "body": "Acta not found"}
-
-    # --- derive client email from metadata row titled "Client_Email"
-    email_item = next((i for i in items if i.get("title") == "Client_Email" and i.get("comments")), None)
-    if not email_item:
-        return {"statusCode": 404, "body": "Client email missing"}
-    recipient = email_item["comments"][0]
-
-    # --- locate PDF path
-    pdf_key = next((i.get("s3_pdf_path") for i in items if i.get("s3_pdf_path")), None)
-    if not pdf_key:
-        return {"statusCode": 404, "body": "PDF missing in S3 key"}
-
-    pdf_stream = s3.get_object(Bucket=S3_BUCKET_NAME, Key=pdf_key)["Body"].read()
-
-    # --- create approval token & persist
-    token = str(uuid.uuid4())
-    table.put_item(Item={
-        "approval_token": token,
-        "project_id":     acta_id,
-        "approval_status": "pending"
-    })
-
-    base_url = f"https://{API_ID}.execute-api.{REGION}.amazonaws.com/prod/approve?token={token}"
-    approve  = f"{base_url}&status=approved"
-    reject   = f"{base_url}&status=rejected"
-
-    html_body = f"""
-    <html><body style="font-family:Verdana,Arial">
-      <h3>Acta Approval Request – {acta_id}</h3>
-      <p>Please review the attached Acta and click a response:</p>
-      <p>
-        <a href="{approve}" style="padding:10px 18px;background:#4AC795;color:#fff;text-decoration:none;border-radius:4px">✔ Approve</a>
-        &nbsp;
-        <a href="{reject}"  style="padding:10px 18px;background:#E74C3C;color:#fff;text-decoration:none;border-radius:4px">✖ Reject</a>
-      </p>
-      <p style="font-size:12px;color:#888">Automated message via CVDex Acta Automation Platform.</p>
-    </body></html>
-    """
-
-    # build raw email (HTML + PDF attachment)
-    msg = EmailMessage()
-    msg["Subject"] = f"Acta Approval • {acta_id}"
-    msg["From"]    = EMAIL_SOURCE
-    msg["To"]      = recipient
-    msg.set_content("HTML required")
-    msg.add_alternative(html_body, subtype="html")
-    msg.add_attachment(pdf_stream,
-                       maintype="application",
-                       subtype="pdf",
-                       filename="Acta.pdf")
-
-    # send via SES
-    res = ses.send_raw_email(
-        Source=EMAIL_SOURCE,
-        Destinations=[recipient],
-        RawMessage={"Data": msg.as_bytes()}
+def get_pp_token():
+    sec = secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"]
+    creds = json.loads(sec)
+    body = (
+      f"grant_type=client_credentials"
+      f"&client_id={creds['PROJECTPLACE_ROBOT_CLIENT_ID']}"
+      f"&client_secret={creds['PROJECTPLACE_ROBOT_CLIENT_SECRET']}"
+    ).encode()
+    req = urllib.request.Request(
+      f"{API_BASE_URL}/oauth2/access_token",
+      data=body,
+      headers={"Content-Type":"application/x-www-form-urlencoded"},
+      method="POST"
     )
-    assert res["ResponseMetadata"]["HTTPStatusCode"] == 200, "SES send failed"
-    return {"statusCode":200, "body":json.dumps({"MessageId":res["MessageId"]})}
+    return json.loads(urllib.request.urlopen(req).read())["access_token"]
+
+
+def get_pm_email(project_id, token, creator_id):
+    req = urllib.request.Request(
+      f"{API_BASE_URL}/1/projects/{project_id}/members",
+      headers={"Authorization":f"Bearer {token}"})
+    members = json.loads(urllib.request.urlopen(req).read())
+    for m in members:
+        if str(m.get("id")) == str(creator_id):
+            return m.get("email","")
+    return ""
+
+
+def lambda_handler(event, ctx):
+    print("🚀 Starting enrichment…")
+    try:
+        token = get_pp_token()
+    except Exception as e:
+        print("❌ Auth failed:", e)
+        return {"statusCode":500,"body":"Auth failure"}
+
+    items = ddb.scan().get("Items",[])
+    if not items:
+        return {"statusCode":404,"body":"No records"}
+
+    by_proj = defaultdict(list)
+    for it in items:
+        if "project_id" in it and "card_id" in it:
+            by_proj[it["project_id"]].append(it)
+
+    for project_id, cards in by_proj.items():
+        print("🔄 Project", project_id)
+        for it in cards:
+            proj = project_id
+            card = it["card_id"]
+            creator = it.get("creator","")
+            client_email = ""
+            if it.get("title")=="Client_Email" and isinstance(it.get("comments"),list):
+                client_email = it["comments"][0]
+            try:
+                cid = json.loads(creator.replace("'",'"')).get("id")
+            except: cid = None
+            pm = get_pm_email(proj, token, cid) if cid else ""
+
+            new_token = str(uuid4())
+            ts = int(time.time())
+
+            try:
+                ddb.update_item(
+                  Key={"project_id":proj,"card_id":card},
+                  UpdateExpression=(
+                    "SET client_email=:ce, pm_email=:pe, "
+                    "approval_token=:at, sent_timestamp=:ts, #s=:st"
+                  ),
+                  ExpressionAttributeNames={"#s":"status"},
+                  ExpressionAttributeValues={
+                    ":ce":client_email,
+                    ":pe":pm,
+                    ":at":new_token,
+                    ":ts":ts,
+                    ":st":"pending"
+                  }
+                )
+                print("✅ Updated", proj, card)
+            except Exception as e:
+                print("❌ Err updating", card, e)
+
+    print("✅ Done")
+    return {"statusCode":200,"body":"OK"}

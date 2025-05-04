@@ -40,6 +40,13 @@ jobs:
 
       - name: 📤 Emit API ID for injection
         id: api
+        env:
+          AWS_REGION:               us-east-2
+          AWS_ACCOUNT_ID:           ${{ secrets.AWS_ACCOUNT_ID }}
+          EMAIL_SOURCE:             AutomationSolutionsCenter@cvdexinfo.com
+          DYNAMODB_TABLE_NAME:      ProjectPlace_DataExtrator_landing_table_v3
+          PROJECTPLACE_SECRET_NAME: ProjectPlaceAPICredentials
+          S3_BUCKET_NAME:           projectplace-dv-2025-x9a7b
         run: |
           echo "api_id=$(python3 scripts/emit_api_id.py)" >> $GITHUB_OUTPUT
 

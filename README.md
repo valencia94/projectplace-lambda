@@ -1,99 +1,128 @@
-# Acta Automation Approval Workflow
+```markdown
+# CVDex – ProjectPlace Acta Automation Platform
 
-This project automates the generation and approval of Acta documents, integrating AWS Lambda, DynamoDB, SES, S3, and API Gateway.
-
-## Purpose
-- Automatically extract client emails and Acta metadata.
-- Generate Acta PDF documents.
-- Send approval requests via email with attached Actas.
-- Track approvals and rejections through API Gateway.
-
-## Components
-
-| Service | Purpose |
-|---------|---------|
-| AWS Lambda | Hosts `sendApprovalEmail` and `handleApprovalCallback` functions |
-| AWS API Gateway | Handles `/approve` callback endpoint |
-| AWS DynamoDB | Stores Acta metadata including client email mapping |
-| AWS S3 | Stores generated Acta PDF documents |
-| AWS SES | Sends Acta approval emails to clients |
-
-## Deployment
-
-### Environment Variables
-- `AWS_REGION`: Deployment AWS region (e.g., `us-east-2`)
-- `AWS_ACCOUNT_ID`: AWS Account ID
-- `S3_BUCKET_NAME`: S3 bucket where Acta PDFs are stored
-- `DYNAMODB_TABLE_NAME`: DynamoDB table storing Acta metadata
-- `EMAIL_SOURCE`: Verified SES email address used to send emails
-- `DOMAIN`: API Gateway domain for approval links
-
-### Lambda Functions
-- `sendApprovalEmail`:
-  - Extracts client email from DynamoDB (`title == 'Client_Email'`)
-  - Fetches Acta PDF from S3
-  - Sends approval request email with PDF attached
-  - Includes branded HTML with Approve/Reject buttons
-
-- `handleApprovalCallback`:
-  - Updates Acta status in DynamoDB based on approval/rejection
-
-### Branded Email Flow
-- HTML includes Ikusi logo and styling.
-- Approve and Reject buttons redirect to API Gateway URLs.
-- Additional comment prompt provided post-click (in UI, not email).
-
-Sample HTML Preview:
-```
-<html>
-  <body style="font-family:Verdana, sans-serif; color:#333;">
-    <div style="padding:20px; border:1px solid #ccc; max-width:600px;">
-      <img src="https://ikusi.com/branding/logo.png" alt="Ikusi" style="max-width:150px; margin-bottom:10px;">
-      <h2 style="color:#4AC795;">Acta Approval Request</h2>
-      <p>
-        Please review the attached Acta document.
-        You may approve or reject this Acta using the buttons below.
-      </p>
-      <div style="margin-top:20px;">
-        <a href="{{ approve_url }}" style="padding:10px 20px; background:#4AC795; color:#fff; text-decoration:none; border-radius:4px;">✔️ Approve</a>
-        <a href="{{ reject_url }}" style="padding:10px 20px; background:#E74C3C; color:#fff; text-decoration:none; border-radius:4px; margin-left:10px;">✖️ Reject</a>
-      </div>
-      <p style="margin-top:30px; font-size:13px; color:#999;">
-        If you would like to provide additional comments or context, please include them via the approval interface after clicking.
-      </p>
-    </div>
-  </body>
-</html>
-```
-
-### Testing
-
-#### Lambda Test Event (sendApprovalEmail)
-Use this JSON to manually test from the Lambda Console:
-```json
-{
-  "acta_id": "your-project-id"
-}
-```
-Replace `your-project-id` with a valid `project_id` stored in DynamoDB that includes:
-- A card titled `Client_Email`
-- A `comments` array with a verified SES email
-- An `s3_pdf_path` value pointing to the correct Acta document in S3
-
-### Known Considerations
-- SES in Sandbox mode requires recipient email verification.
-- Lambda must include `config/email_map.json` inside ZIP package.
-- Approve/Reject feedback UI coming in Module 2 (Portal).
-
-## Future Enhancements
-- Add retry logic for SES email failures.
-- Add auto-expire for pending approvals after X days.
-- Expand approval flows into a client-facing UI portal.
+> End-to-end serverless workflow that **generates**, **emails**, and **captures approvals** for Acta documents pulled from ProjectPlace.
 
 ---
 
-Built with focus on brand integrity, operational excellence, and production-grade scalability.
+## 📁 Repository Layout
+
+| Path | Purpose |
+|------|---------|
+| `approval/` | Lambda business logic |
+| ├── `sendApprovalEmail.py` |  ➜ Sends approve / reject email with PDF attachment |
+| └── `handleApprovalCallback.py` |  ➜ Processes `/approve?token=…` clicks |
+| `scripts/` | Deployment helpers |
+| ├── `deploy_metadata_enricher.py` |  ➜ Zip & deploy `projectMetadataEnricher` Lambda |
+| ├── `deploy_approval_workflow.py` |  ➜ Deploy both email + callback Lambdas **plus** API Gateway |
+| └── `deploy_send_approval_email.py` |  ➜ (Standalone) redeploy email Lambda |
+| `deployment_zips/` | Auto-generated build artifacts (git-ignored) |
+| `.github/workflows/` | CI/CD pipelines |
+| ├── `deploy_metadata_enricher.yml` |
+| └── `deploy_approval_workflow.yml` |
+| `README.md` | You’re reading it |
+
+> **Important:** All build artifacts are created on-the-fly by workflows—no manual zips committed to source.
 
 ---
 
-✨ Project sponsored and maintained by CVDex Tech Solutions, Strategic Developer: AIGOR.
+## 🌐 High-Level Architecture
+
+```
+ProjectPlace → Extractor Lambda
+      │          └── uploads DOCX/PDF to S3
+      ▼
+projectMetadataEnricher Lambda
+      │          └── adds client/PM emails, approval_token row in DynamoDB
+      ▼
+sendApprovalEmail Lambda
+      │          └── SES email (HTML) ➜ client
+      ▼
+Client Clicks /approve?token=XYZ
+      │
+API Gateway  ↦  handleApprovalCallback Lambda
+      │          └── updates approval_status in DynamoDB
+      ▼
+DynamoDB status = approved / rejected
+```
+
+*A live systems diagram is tracked in the project BRD canvas.*
+
+---
+
+## 🚀 Quick-Start (CI/CD only)
+
+1. **Clone** the repo and push updates to `main`.
+2. Add GitHub **Secrets**:  
+   * `AWS_ACCESS_KEY_ID`  
+   * `AWS_SECRET_ACCESS_KEY`  
+   * `AWS_ACCOUNT_ID`  
+   * *(Optional override)* `S3_BUCKET_NAME` (defaults baked into workflow)
+3. Verify in **SES (sandbox)**  
+   * Sender: `AutomationSolutionsCenter@cvdexinfo.com`  
+   * At least one recipient inbox (test)
+4. In GitHub → **Actions**  
+   1. Run **“Deploy projectMetadataEnricher”**  
+   2. Run **“Deploy Acta Approval Workflow”**
+
+Both workflows include smoke tests:
+* Enricher: invokes Lambda with `{}` and prints result.
+* Approval: invokes `sendApprovalEmail` with a dummy `acta_id`; job fails if SES reply ≠ 200.
+
+---
+
+## 🔑 Environment Variables
+
+| Name | Set By | Used In | Example |
+|------|--------|--------|---------|
+| `AWS_REGION` | Workflow | All Lambdas | `us-east-2` |
+| `AWS_ACCOUNT_ID` | Secret | Deploy scripts | `123456789012` |
+| `EMAIL_SOURCE` | Workflow | `sendApprovalEmail` | `AutomationSolutionsCenter@cvdexinfo.com` |
+| `ACTA_API_ID` | Auto-captured | `sendApprovalEmail` | `4r0pt34gx4` |
+| `DYNAMODB_TABLE_NAME` | Workflow | All Lambdas | `ProjectPlace_DataExtrator_landing_table_v3` |
+| `S3_BUCKET_NAME` | Workflow | `sendApprovalEmail` | `projectplace-dv-2025-x9a7b` |
+
+---
+
+## 🧪 Manual Testing
+
+```bash
+# Trigger email Lambda manually (CLI)
+aws lambda invoke \
+  --function-name sendApprovalEmail \
+  --payload '{"acta_id":"100000000000000"}' \
+  --cli-binary-format raw-in-base64-out \
+  out.json --region us-east-2
+
+# Simulate approval click
+curl "https://<ACTA_API_ID>.execute-api.us-east-2.amazonaws.com/prod/approve?token=<TOKEN>&status=approved"
+```
+
+Check DynamoDB record for `approval_status = approved`.
+
+---
+
+## 🆘 Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---------|--------------|-----|
+| `Invalid base64` on `aws lambda invoke` | Forgot `--cli-binary-format raw-in-base64-out` | Add flag or use file payload |
+| Email not received | SES still sandbox or recipient not verified | Verify recipient or request production SES |
+| `/approve` returns 403 | API Gateway invoke permission missing | Rerun `deploy_approval_workflow.py` to re-add permission |
+| Dynamo item not created | `projectMetadataEnricher` not invoked | Check EventBridge rule or manual test invoke |
+
+---
+
+## 🗂 Project Tracker & BRD
+
+All milestones, run-IDs, and architecture diagrams live in the shared **Canvas BRD**:  
+`Acta Project Tracker + BRD (v1.x)`
+
+---
+
+## 📜 License
+
+Internal use for CVDex & Ikusi partners. © 2025 CVDex Technologies.
+```
+
+Copy the entire Markdown block into `README.md` and commit—it’s immediately aligned with the new deployment flow and smoke-test setup.

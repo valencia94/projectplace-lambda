@@ -27,8 +27,10 @@ jobs:
           S3_BUCKET_NAME:           projectplace-dv-2025-x9a7b
           DYNAMODB_TABLE_NAME:      ProjectPlace_DataExtrator_landing_table_v3
         run: |
-          python3 scripts/deploy_approval_workflow.py | tee /tmp/deploy.log
-          API_ID=$(grep 'API Gateway ID:' /tmp/deploy.log | awk '{print $4}')
+          API_ID=$(python3 - <<'PY'
+import json, sys, scripts.deploy_approval_workflow as d
+d.main(); print(d.last_api_id)          # <- emits the id set in the script
+PY)
           echo "api_id=$API_ID" >> $GITHUB_OUTPUT
 
       - name: 🧪 Smoke test email lambda

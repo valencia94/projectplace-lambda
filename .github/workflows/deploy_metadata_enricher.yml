@@ -33,3 +33,11 @@ jobs:
           DYNAMODB_TABLE_NAME: ProjectPlace_DataExtrator_landing_table_v3
           PROJECTPLACE_SECRET_NAME: ProjectPlaceAPICredentials
         run: python3 scripts/deploy_metadata_enricher.py
+
+        - name: 🧪 Smoke test enricher
+        run: |
+          aws lambda invoke \
+            --function-name projectMetadataEnricher \
+            --payload '{}' \
+            /tmp/out.json --region us-east-2
+          cat /tmp/out.json

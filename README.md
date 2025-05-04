@@ -1,4 +1,3 @@
-```markdown
 # CVDex – ProjectPlace Acta Automation Platform
 
 > End-to-end serverless workflow that **generates**, **emails**, and **captures approvals** for Acta documents pulled from ProjectPlace.
@@ -28,23 +27,8 @@
 
 ## 🌐 High-Level Architecture
 
-```
-ProjectPlace → Extractor Lambda
-      │          └── uploads DOCX/PDF to S3
-      ▼
-projectMetadataEnricher Lambda
-      │          └── adds client/PM emails, approval_token row in DynamoDB
-      ▼
-sendApprovalEmail Lambda
-      │          └── SES email (HTML) ➜ client
-      ▼
-Client Clicks /approve?token=XYZ
-      │
-API Gateway  ↦  handleApprovalCallback Lambda
-      │          └── updates approval_status in DynamoDB
-      ▼
-DynamoDB status = approved / rejected
-```
+ProjectPlace → Extractor Lambda │ └── uploads DOCX/PDF to S3 ▼ projectMetadataEnricher Lambda │ └── adds client/PM emails, approval_token row in DynamoDB ▼ sendApprovalEmail Lambda │ └── SES email (HTML) ➜ client ▼ Client Clicks /approve?token=XYZ │ API Gateway ↦ handleApprovalCallback Lambda │ └── updates approval_status in DynamoDB ▼ DynamoDB status = approved / rejected
+
 
 *A live systems diagram is tracked in the project BRD canvas.*
 
@@ -96,33 +80,3 @@ aws lambda invoke \
 
 # Simulate approval click
 curl "https://<ACTA_API_ID>.execute-api.us-east-2.amazonaws.com/prod/approve?token=<TOKEN>&status=approved"
-```
-
-Check DynamoDB record for `approval_status = approved`.
-
----
-
-## 🆘 Troubleshooting
-
-| Symptom | Likely Cause | Fix |
-|---------|--------------|-----|
-| `Invalid base64` on `aws lambda invoke` | Forgot `--cli-binary-format raw-in-base64-out` | Add flag or use file payload |
-| Email not received | SES still sandbox or recipient not verified | Verify recipient or request production SES |
-| `/approve` returns 403 | API Gateway invoke permission missing | Rerun `deploy_approval_workflow.py` to re-add permission |
-| Dynamo item not created | `projectMetadataEnricher` not invoked | Check EventBridge rule or manual test invoke |
-
----
-
-## 🗂 Project Tracker & BRD
-
-All milestones, run-IDs, and architecture diagrams live in the shared **Canvas BRD**:  
-`Acta Project Tracker + BRD (v1.x)`
-
----
-
-## 📜 License
-
-Internal use for CVDex & Ikusi partners. © 2025 CVDex Technologies.
-```
-
-Copy the entire Markdown block into `README.md` and commit—it’s immediately aligned with the new deployment flow and smoke-test setup.

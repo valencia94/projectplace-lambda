@@ -1,39 +1,37 @@
-name: Deploy projectMetadataEnricher
+name: Deploy Metadata Enricher
 on: [workflow_dispatch]
 
 jobs:
-  deploy:
+  deploy-enricher:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Checkout repo
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: 🐍 Setup Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.9"
 
-      - name: 📦 Install boto3
+      - name: Install boto3
         run: pip install boto3
 
-      - name: 🔐 Configure AWS credentials
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            us-east-2
 
-      - name: 🚀 Deploy Metadata Enricher Lambda
+      - name: 🚀 Deploy projectMetadataEnricher Lambda
         env:
           AWS_REGION:               us-east-2
           AWS_ACCOUNT_ID:           ${{ secrets.AWS_ACCOUNT_ID }}
           DYNAMODB_TABLE_NAME:      ProjectPlace_DataExtrator_landing_table_v3
           PROJECTPLACE_SECRET_NAME: ProjectPlaceAPICredentials
-        run: |
-          python3 scripts/deploy_metadata_enricher.py
+        run: python3 scripts/deploy_metadata_enricher.py
 
-      - name: 🧪 Smoke test Lambda
+      - name: 🧪 Smoke test metadata enricher
         run: |
           aws lambda invoke \
             --function-name projectMetadataEnricher \

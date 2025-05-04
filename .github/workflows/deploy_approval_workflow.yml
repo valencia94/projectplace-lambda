@@ -8,35 +8,29 @@ jobs:
       - uses: actions/checkout@v3
 
       - uses: actions/setup-python@v4
-        with: {python-version: 3.9}
+        with:
+          python-version: 3.9
 
-      - run: pip install boto3
+      - name: Install boto3
+        run: pip install boto3
 
-      - uses: aws-actions/configure-aws-credentials@v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-2
+          aws-region:            us-east-2
 
-      # ── Deploy stack & capture API_ID ──────────────────────────────
       - name: 🚀 Deploy stack
-        id: deploy
-        env:
-          AWS_REGION:          us-east-2
-          AWS_ACCOUNT_ID:      ${{ secrets.AWS_ACCOUNT_ID }}
-          EMAIL_SOURCE:        AutomationSolutionsCenter@cvdexinfo.com
-          S3_BUCKET_NAME:      projectplace-dv-2025-x9a7b
-          DYNAMODB_TABLE_NAME: ProjectPlace_DataExtrator_landing_table_v3
         run: |
-          API_ID=$(python3 - <<'PY'
-import scripts.deploy_approval_workflow as d
-d.main()
-print(d.last_api_id)
-PY
-          )
-          echo "api_id=$API_ID" >> $GITHUB_OUTPUT
+          python3 scripts/deploy_approval_workflow.py
+        env:
+          AWS_REGION:            us-east-2
+          AWS_ACCOUNT_ID:        ${{ secrets.AWS_ACCOUNT_ID }}
+          EMAIL_SOURCE:          AutomationSolutionsCenter@cvdexinfo.com
+          S3_BUCKET_NAME:        projectplace-dv-2025-x9a7b
+          DYNAMODB_TABLE_NAME:   ProjectPlace_DataExtrator_landing_table_v3
 
-      # ── Smoke test email Lambda ───────────────────────────────────
       - name: 🧪 Smoke test sendApprovalEmail
         run: |
           aws lambda invoke \

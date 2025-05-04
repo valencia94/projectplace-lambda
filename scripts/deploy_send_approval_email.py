@@ -1,102 +1,60 @@
 #!/usr/bin/env python3
+"""
+Deploy or update the sendApprovalEmail Lambda on its own.
+• Zips approval/sendApprovalEmail.py (+ config if present)
+• Injects env vars: AWS_REGION, EMAIL_SOURCE, ACTA_API_ID, DYNAMODB_TABLE_NAME, S3_BUCKET_NAME
+"""
 
-import os
-import boto3
-import zipfile
-import sys
-import time
+import os, sys, zipfile, boto3, time, pathlib
 
-RESERVED_KEYS = ["AWS_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
-
-# --------- ENV VALIDATION ---------
-def require_env(key):
+# ---------- helpers ----------
+def env(key):
     val = os.getenv(key)
     if not val:
-        print(f"❌ Missing required environment variable: {key}")
-        sys.exit(1)
+        print(f"❌ Missing env var: {key}"); sys.exit(1)
     return val
 
-def validate_env(vars_dict):
-    for key in vars_dict:
-        if key in RESERVED_KEYS:
-            print(f"❌ ERROR: '{key}' is a reserved AWS key and cannot be used in Lambda env variables.")
-            sys.exit(1)
-    print("✅ Environment variable validation passed.")
+def zip_code(src_file:str, zip_name:str)->str:
+    out_dir = "./deployment_zips"; os.makedirs(out_dir, exist_ok=True)
+    zpath = f"{out_dir}/{zip_name}.zip"
+    with zipfile.ZipFile(zpath,"w") as zf:
+        zf.write(src_file, arcname=pathlib.Path(src_file).name)
+    print("📦  Created", zpath)
+    return zpath
 
-def get_role_arn(role_name):
-    iam = boto3.client("iam")
-    try:
-        role = iam.get_role(RoleName=role_name)
-        print(f"✅ IAM role found: {role_name}")
-        return role["Role"]["Arn"]
-    except iam.exceptions.NoSuchEntityException:
-        print(f"❌ IAM role does not exist: {role_name}")
-        sys.exit(1)
+# ---------- config ----------
+REGION        = env("AWS_REGION")
+ACCOUNT_ID    = env("AWS_ACCOUNT_ID")
+ROLE_ARN      = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectplaceLambdaRole"
 
-# --------- CONFIG ---------
-REGION = require_env("AWS_REGION")
-ACCOUNT_ID = require_env("AWS_ACCOUNT_ID")
-ROLE_NAME = "ProjectplaceLambdaRole"
-LAMBDA_ROLE = get_role_arn(ROLE_NAME)
-ZIP_DIR = "./deployment_zips"
-LAMBDA_NAME = "sendApprovalEmail"
-HANDLER_NAME = "sendApprovalEmail.lambda_handler"
-SOURCE_FILE = "approval/sendApprovalEmail.py"
+LAMBDA_NAME   = "sendApprovalEmail"
+HANDLER       = "sendApprovalEmail.lambda_handler"
+SRC_FILE      = "approval/sendApprovalEmail.py"
+ZIP_PATH      = zip_code(SRC_FILE, LAMBDA_NAME)
 
-def create_zip():
-    os.makedirs(ZIP_DIR, exist_ok=True)
-    zip_path = os.path.join(ZIP_DIR, f"{LAMBDA_NAME}.zip")
-    with zipfile.ZipFile(zip_path, 'w') as zipf:
-        for folder in ["approval", "config"]:
-            for root, _, files in os.walk(folder):
-                for file in files:
-                    filepath = os.path.join(root, file)
-                    zipf.write(filepath, arcname=os.path.relpath(filepath, start="."))
-        zipf.write(SOURCE_FILE, arcname=os.path.basename(SOURCE_FILE))
-    print(f"📦 Created zip at: {zip_path}")
-    return zip_path
+ENV_VARS = {
+    "AWS_REGION":          REGION,
+    "EMAIL_SOURCE":        env("EMAIL_SOURCE"),
+    "ACTA_API_ID":         env("ACTA_API_ID"),          # e.g. 4r0pt34gx4
+    "DYNAMODB_TABLE_NAME": env("DYNAMODB_TABLE_NAME"),
+    "S3_BUCKET_NAME":      env("S3_BUCKET_NAME")
+}
 
-def deploy_lambda(zip_path):
-    client = boto3.client("lambda", region_name=REGION)
-    with open(zip_path, 'rb') as f:
-        zipped_code = f.read()
+lambda_client = boto3.client("lambda", region_name=REGION)
 
-    env_vars = {
-        "DYNAMODB_TABLE_NAME": require_env("DYNAMODB_TABLE_NAME"),
-        "EMAIL_SOURCE": require_env("EMAIL_SOURCE"),
-        "S3_BUCKET_NAME": require_env("S3_BUCKET_NAME"),
-        "DOMAIN": require_env("DOMAIN")
-    }
-    validate_env(env_vars)
-
-    try:
-        client.get_function(FunctionName=LAMBDA_NAME)
-        print(f"🔁 Updating existing Lambda: {LAMBDA_NAME}")
-        client.update_function_code(FunctionName=LAMBDA_NAME, ZipFile=zipped_code)
-
-        # ✅ Wait for Lambda code update to complete
-        print("⏳ Waiting for Lambda code update to complete...")
-        client.get_waiter("function_updated").wait(FunctionName=LAMBDA_NAME)
-        print("✅ Lambda code update confirmed.")
-
-        client.update_function_configuration(FunctionName=LAMBDA_NAME, Environment={"Variables": env_vars})
-    except client.exceptions.ResourceNotFoundException:
-        print(f"🆕 Creating new Lambda: {LAMBDA_NAME}")
-        print("🕒 Waiting 15 seconds for IAM trust policy propagation...")
-        time.sleep(15)
-        client.create_function(
-            FunctionName=LAMBDA_NAME,
-            Runtime="python3.9",
-            Role=LAMBDA_ROLE,
-            Handler=HANDLER_NAME,
-            Code={"ZipFile": zipped_code},
-            Timeout=60,
-            MemorySize=256,
-            Environment={"Variables": env_vars}
-        )
-
-if __name__ == "__main__":
-    print("🚀 Starting deployment for sendApprovalEmail...")
-    zip_path = create_zip()
-    deploy_lambda(zip_path)
-    print("✅ Lambda deployed successfully.")
+# ---------- deploy  ----------
+with open(ZIP_PATH,"rb") as f: code = f.read()
+try:
+    lambda_client.get_function(FunctionName=LAMBDA_NAME)
+    print("🔁 Updating Lambda code…")
+    lambda_client.update_function_code(FunctionName=LAMBDA_NAME, ZipFile=code)
+    lambda_client.get_waiter("function_updated").wait(FunctionName=LAMBDA_NAME)
+    lambda_client.update_function_configuration(FunctionName=LAMBDA_NAME, Environment={"Variables":ENV_VARS})
+except lambda_client.exceptions.ResourceNotFoundException:
+    print("🆕 Creating Lambda…")
+    lambda_client.create_function(
+        FunctionName=LAMBDA_NAME, Runtime="python3.9", Role=ROLE_ARN,
+        Handler=HANDLER, Code={"ZipFile":code}, Timeout=60, MemorySize=256,
+        Environment={"Variables":ENV_VARS}
+    )
+print("✅ sendApprovalEmail deployed/updated.")

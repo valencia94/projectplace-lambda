@@ -1,38 +1,53 @@
-name: Deploy projectMetadataEnricher
-
+name: Deploy Acta Approval Workflow
 on: [workflow_dispatch]
 
 jobs:
-  deploy:
+  deploy-approval:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
-      - uses: actions/setup-python@v4
-        with: {python-version: 3.9}
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with: python-version: "3.9"
 
-      - run: pip install boto3
+      - name: Install boto3
+        run: pip install boto3
 
-      - uses: aws-actions/configure-aws-credentials@v2
+      - name: Configure AWS creds
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-2
+          aws-region:            us-east-2
 
-      - name: 🚀 Deploy Lambda
+      - name: 🚀 Deploy everything
+        id: deploy
         env:
-          AWS_REGION: us-east-2
+          AWS_REGION:               us-east-2
           AWS_ACCOUNT_ID:           ${{ secrets.AWS_ACCOUNT_ID }}
+          EMAIL_SOURCE:             AutomationSolutionsCenter@cvdexinfo.com
           DYNAMODB_TABLE_NAME:      ProjectPlace_DataExtrator_landing_table_v3
           PROJECTPLACE_SECRET_NAME: ProjectPlaceAPICredentials
-        run: python3 scripts/deploy_metadata_enricher.py
+          S3_BUCKET_NAME:           projectplace-dv-2025-x9a7b
+        run: |
+          API_ID=$(python3 - <<'PY'
+import scripts.deploy_approval_workflow as d
+d.main()
+print(d.last_api_id)
+PY
+          )
+          echo "api_id=$API_ID" >> $GITHUB_OUTPUT
 
-      - name: 🧪 Smoke test enricher
+      - name: 🧪 Smoke test sendApprovalEmail
+        env:
+          AWS_REGION:   us-east-2
+          ACTA_API_ID:  ${{ steps.deploy.outputs.api_id }}
+          EMAIL_SOURCE: AutomationSolutionsCenter@cvdexinfo.com
         run: |
           aws lambda invoke \
-            --function-name projectMetadataEnricher \
-            --payload '{}' \
+            --function-name sendApprovalEmail \
+            --payload '{"acta_id":"100000000000000"}' \
             --cli-binary-format raw-in-base64-out \
-            /tmp/out.json --region us-east-2
-          cat /tmp/out.json
-
+            /tmp/res.json
+          cat /tmp/res.json

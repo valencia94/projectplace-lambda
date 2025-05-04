@@ -1,84 +1,68 @@
 #!/usr/bin/env python3
-"""
-Deploy / update projectMetadataEnricher Lambda.
+import os, zipfile, boto3, sys
 
-Adds the external dependency **requests** into the zip package automatically.
-"""
+def require_env(key):
+    val = os.getenv(key)
+    if not val:
+        print(f"❌ Missing env var: {key}")
+        sys.exit(1)
+    return val
 
-import os, sys, zipfile, boto3, pathlib, subprocess
+# ─── ENVIRONMENT ─────────────────────────────────────────────
+AWS_REGION  = require_env("AWS_REGION")
+ACCOUNT_ID  = require_env("AWS_ACCOUNT_ID")
+TABLE_NAME  = require_env("DYNAMODB_TABLE_NAME")
+SECRET_NAME = require_env("PROJECTPLACE_SECRET_NAME")
 
-# ─── ENV ────────────────────────────────────────────────────────────
-REGION     = os.environ["AWS_REGION"]
-ACCOUNT_ID = os.environ["AWS_ACCOUNT_ID"]
-ROLE_ARN   = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectplaceLambdaRole"
-
-LAMBDA_NAME = "projectMetadataEnricher"
+FUNCTION    = "projectMetadataEnricher"
 HANDLER     = "project_metadata_enricher.lambda_handler"
-SRC_FILE    = "approval/project_metadata_enricher.py"
+ROLE_ARN    = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectplaceLambdaRole"
 ZIP_DIR     = "./deployment_zips"
+SRC_FILE    = "approval/project_metadata_enricher.py"
 
-ENV = {
-    "DYNAMODB_TABLE_NAME":   os.environ["DYNAMODB_TABLE_NAME"],
-    "PROJECTPLACE_SECRET_NAME": os.environ["PROJECTPLACE_SECRET_NAME"],
-}
-
-lambda_client = boto3.client("lambda", region_name=REGION)
-
-
-# ─── ZIP BUILD ──────────────────────────────────────────────────────
-def build_zip() -> str:
+# ─── ZIP PACKAGE ─────────────────────────────────────────────
+def make_zip():
     os.makedirs(ZIP_DIR, exist_ok=True)
-    zpath = f"{ZIP_DIR}/{LAMBDA_NAME}.zip"
-
-    # install requests into temp dir
-    site_dir = "/tmp/pydeps"
-    subprocess.check_call(["python3", "-m", "pip", "install", "-q", "-t", site_dir, "requests"])
-
+    zpath = f"{ZIP_DIR}/{FUNCTION}.zip"
     with zipfile.ZipFile(zpath, "w") as zf:
-        # add site-packages
-        for root, _, files in os.walk(site_dir):
-            for f in files:
-                full = os.path.join(root, f)
-                rel  = os.path.relpath(full, start=site_dir)
-                zf.write(full, arcname=rel)
-
-        # add lambda code
-        zf.write(SRC_FILE, arcname=pathlib.Path(SRC_FILE).name)
-
-    print("📦  Created deployment zip:", zpath)
+        zf.write(SRC_FILE, arcname=os.path.basename(SRC_FILE))
     return zpath
 
-
-# ─── DEPLOY ─────────────────────────────────────────────────────────
-def deploy():
-    zip_path = build_zip()
+# ─── DEPLOY LAMBDA ───────────────────────────────────────────
+def deploy(zip_path):
+    client = boto3.client("lambda", region_name=AWS_REGION)
     with open(zip_path, "rb") as f:
-        code_bytes = f.read()
+        code = f.read()
 
-    env_cfg = {"Variables": ENV}
+    env_vars = {
+        "AWS_REGION": AWS_REGION,
+        "DYNAMODB_TABLE_NAME": TABLE_NAME,
+        "PROJECTPLACE_SECRET_NAME": SECRET_NAME
+    }
+
     try:
-        lambda_client.get_function(FunctionName=LAMBDA_NAME)
-        lambda_client.update_function_code(FunctionName=LAMBDA_NAME, ZipFile=code_bytes)
-        waiter = lambda_client.get_waiter("function_updated")
-        waiter.wait(FunctionName=LAMBDA_NAME)
-        lambda_client.update_function_configuration(FunctionName=LAMBDA_NAME, Environment=env_cfg)
-    except lambda_client.exceptions.ResourceNotFoundException:
-        lambda_client.create_function(
-            FunctionName=LAMBDA_NAME,
+        client.get_function(FunctionName=FUNCTION)
+        print("🔁 Updating Lambda code & config…")
+        client.update_function_code(FunctionName=FUNCTION, ZipFile=code)
+        client.update_function_configuration(
+            FunctionName=FUNCTION,
+            Environment={"Variables": env_vars}
+        )
+    except client.exceptions.ResourceNotFoundException:
+        print("🚀 Creating Lambda...")
+        client.create_function(
+            FunctionName=FUNCTION,
             Runtime="python3.9",
             Role=ROLE_ARN,
             Handler=HANDLER,
-            Code={"ZipFile": code_bytes},
-            Timeout=60,
+            Code={"ZipFile": code},
+            Timeout=120,
             MemorySize=256,
-            Environment=env_cfg,
+            Environment={"Variables": env_vars}
         )
-    print("✅  projectMetadataEnricher deployed/updated.")
+    print("✅ Lambda deployed.")
 
-
+# ─── MAIN ────────────────────────────────────────────────────
 if __name__ == "__main__":
-    missing = [k for k in ("AWS_REGION", "AWS_ACCOUNT_ID", "DYNAMODB_TABLE_NAME", "PROJECTPLACE_SECRET_NAME") if not os.getenv(k)]
-    if missing:
-        print("Missing env vars:", ", ".join(missing))
-        sys.exit(1)
-    deploy()
+    zp = make_zip()
+    deploy(zp)

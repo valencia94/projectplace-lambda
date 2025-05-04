@@ -11,22 +11,22 @@ jobs:
       - name: 🧾 Checkout Code
         uses: actions/checkout@v3
 
-      - name: Setup Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.9"
 
-      - name: Install boto3
+      - name: 📦 Install boto3
         run: pip install boto3
 
-      - name: Configure AWS creds
+      - name: 🔐 Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            us-east-2
 
-      - name: 🚀 Deploy everything
+      - name: 🚀 Deploy Lambdas & API
         id: deploy
         env:
           AWS_REGION:               us-east-2
@@ -36,18 +36,17 @@ jobs:
           PROJECTPLACE_SECRET_NAME: ProjectPlaceAPICredentials
           S3_BUCKET_NAME:           projectplace-dv-2025-x9a7b
         run: |
-          API_ID=$(python3 - <<'PY'
-import scripts.deploy_approval_workflow as d
-d.main()
-print(d.last_api_id)
-PY
-          )
-          echo "api_id=$API_ID" >> $GITHUB_OUTPUT
+          python3 scripts/deploy_approval_workflow.py
+
+      - name: 📤 Emit API ID for injection
+        id: api
+        run: |
+          echo "api_id=$(python3 scripts/emit_api_id.py)" >> $GITHUB_OUTPUT
 
       - name: 🧪 Smoke test sendApprovalEmail
         env:
           AWS_REGION:   us-east-2
-          ACTA_API_ID:  ${{ steps.deploy.outputs.api_id }}
+          ACTA_API_ID:  ${{ steps.api.outputs.api_id }}
           EMAIL_SOURCE: AutomationSolutionsCenter@cvdexinfo.com
         run: |
           aws lambda invoke \

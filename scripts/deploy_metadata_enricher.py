@@ -1,95 +1,85 @@
 #!/usr/bin/env python3
+"""
+Deploy / update projectMetadataEnricher Lambda.
 
-import os
-import boto3
-import zipfile
-import sys
-import time
+Adds the external dependency **requests** into the zip package automatically.
+"""
 
-RESERVED_KEYS = ["AWS_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]
+import os, sys, zipfile, boto3, pathlib, subprocess
 
-# --------- ENV VALIDATION ---------
-def require_env(key):
-    val = os.getenv(key)
-    if not val:
-        print(f"❌ Missing required environment variable: {key}")
-        sys.exit(1)
-    return val
+# ─── ENV ────────────────────────────────────────────────────────────
+REGION     = os.environ["AWS_REGION"]
+ACCOUNT_ID = os.environ["AWS_ACCOUNT_ID"]
+ROLE_ARN   = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectplaceLambdaRole"
 
-def validate_env(vars_dict):
-    for key in vars_dict:
-        if key in RESERVED_KEYS:
-            print(f"❌ ERROR: '{key}' is a reserved AWS key and cannot be used in Lambda env variables.")
-            sys.exit(1)
-    print("✅ Environment variable validation passed.")
-
-def get_role_arn(role_name):
-    iam = boto3.client("iam")
-    try:
-        role = iam.get_role(RoleName=role_name)
-        print(f"✅ IAM role found: {role_name}")
-        return role["Role"]["Arn"]
-    except iam.exceptions.NoSuchEntityException:
-        print(f"❌ IAM role does not exist: {role_name}")
-        sys.exit(1)
-
-# --------- CONFIG ---------
-REGION = require_env("AWS_REGION")
-ACCOUNT_ID = require_env("AWS_ACCOUNT_ID")
-ROLE_NAME = "ProjectplaceLambdaRole"
-LAMBDA_ROLE = get_role_arn(ROLE_NAME)
-ZIP_DIR = "./deployment_zips"
 LAMBDA_NAME = "projectMetadataEnricher"
-HANDLER_NAME = "project_metadata_enricher.lambda_handler"
-SOURCE_FILE = "approval/project_metadata_enricher.py"
+HANDLER     = "project_metadata_enricher.lambda_handler"
+SRC_FILE    = "approval/project_metadata_enricher.py"
+ZIP_DIR     = "./deployment_zips"
 
-def create_zip():
+ENV = {
+    "AWS_REGION":            REGION,
+    "DYNAMODB_TABLE_NAME":   os.environ["DYNAMODB_TABLE_NAME"],
+    "PROJECTPLACE_SECRET_NAME": os.environ["PROJECTPLACE_SECRET_NAME"],
+}
+
+lambda_client = boto3.client("lambda", region_name=REGION)
+
+
+# ─── ZIP BUILD ──────────────────────────────────────────────────────
+def build_zip() -> str:
     os.makedirs(ZIP_DIR, exist_ok=True)
-    zip_path = os.path.join(ZIP_DIR, f"{LAMBDA_NAME}.zip")
-    with zipfile.ZipFile(zip_path, 'w') as zipf:
-        zipf.write(SOURCE_FILE, arcname=os.path.basename(SOURCE_FILE))
-    print(f"📦 Created zip at: {zip_path}")
-    return zip_path
+    zpath = f"{ZIP_DIR}/{LAMBDA_NAME}.zip"
 
-def deploy_lambda(zip_path):
-    client = boto3.client("lambda", region_name=REGION)
-    with open(zip_path, 'rb') as f:
-        zipped_code = f.read()
+    # install requests into temp dir
+    site_dir = "/tmp/pydeps"
+    subprocess.check_call(["python3", "-m", "pip", "install", "-q", "-t", site_dir, "requests"])
 
-    env_vars = {
-        "DYNAMODB_TABLE_NAME": require_env("DYNAMODB_TABLE_NAME"),
-        "PROJECTPLACE_SECRET_NAME": require_env("PROJECTPLACE_SECRET_NAME")
-    }
-    validate_env(env_vars)
+    with zipfile.ZipFile(zpath, "w") as zf:
+        # add site-packages
+        for root, _, files in os.walk(site_dir):
+            for f in files:
+                full = os.path.join(root, f)
+                rel  = os.path.relpath(full, start=site_dir)
+                zf.write(full, arcname=rel)
 
+        # add lambda code
+        zf.write(SRC_FILE, arcname=pathlib.Path(SRC_FILE).name)
+
+    print("📦  Created deployment zip:", zpath)
+    return zpath
+
+
+# ─── DEPLOY ─────────────────────────────────────────────────────────
+def deploy():
+    zip_path = build_zip()
+    with open(zip_path, "rb") as f:
+        code_bytes = f.read()
+
+    env_cfg = {"Variables": ENV}
     try:
-        client.get_function(FunctionName=LAMBDA_NAME)
-        print(f"🔁 Updating existing Lambda: {LAMBDA_NAME}")
-        client.update_function_code(FunctionName=LAMBDA_NAME, ZipFile=zipped_code)
-
-        # ✅ Wait for code update to finish before applying configuration
-        print("⏳ Waiting for Lambda code update to complete...")
-        client.get_waiter("function_updated").wait(FunctionName=LAMBDA_NAME)
-        print("✅ Lambda code update confirmed.")
-
-        client.update_function_configuration(FunctionName=LAMBDA_NAME, Environment={"Variables": env_vars})
-    except client.exceptions.ResourceNotFoundException:
-        print(f"🆕 Creating new Lambda: {LAMBDA_NAME}")
-        print("🕒 Waiting 15 seconds for IAM trust policy propagation...")
-        time.sleep(15)
-        client.create_function(
+        lambda_client.get_function(FunctionName=LAMBDA_NAME)
+        lambda_client.update_function_code(FunctionName=LAMBDA_NAME, ZipFile=code_bytes)
+        waiter = lambda_client.get_waiter("function_updated")
+        waiter.wait(FunctionName=LAMBDA_NAME)
+        lambda_client.update_function_configuration(FunctionName=LAMBDA_NAME, Environment=env_cfg)
+    except lambda_client.exceptions.ResourceNotFoundException:
+        lambda_client.create_function(
             FunctionName=LAMBDA_NAME,
             Runtime="python3.9",
-            Role=LAMBDA_ROLE,
-            Handler=HANDLER_NAME,
-            Code={"ZipFile": zipped_code},
+            Role=ROLE_ARN,
+            Handler=HANDLER,
+            Code={"ZipFile": code_bytes},
             Timeout=60,
             MemorySize=256,
-            Environment={"Variables": env_vars}
+            Environment=env_cfg,
         )
+    print("✅  projectMetadataEnricher deployed/updated.")
+
 
 if __name__ == "__main__":
-    print("🚀 Starting deployment for projectMetadataEnricher...")
-    zip_path = create_zip()
-    deploy_lambda(zip_path)
-    print("✅ Lambda deployed successfully.")
+    missing = [k for k in ("AWS_REGION", "AWS_ACCOUNT_ID", "DYNAMODB_TABLE_NAME", "PROJECTPLACE_SECRET_NAME") if not os.getenv(k)]
+    if missing:
+        print("Missing env vars:", ", ".join(missing))
+        sys.exit(1)
+    deploy()

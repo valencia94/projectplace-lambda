@@ -1,4 +1,3 @@
 # emit_api_id.py
-import deploy_approval_workflow as d
-
-print(d.last_api_id)
+with open("api_id.txt") as f:
+    print(f.read().strip())

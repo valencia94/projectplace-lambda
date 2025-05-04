@@ -36,9 +36,12 @@ jobs:
           AWS_REGION: us-east-2
           ACTA_API_ID: ${{ steps.deploy.outputs.api_id }}
           EMAIL_SOURCE: AutomationSolutionsCenter@cvdexinfo.com
+          
+      - name: 🧪 Smoke test enricher
         run: |
           aws lambda invoke \
-            --function-name sendApprovalEmail \
-            --payload '{"acta_id":"100000000000000"}' \
-            /tmp/email_resp.json --region us-east-2
-          cat /tmp/email_resp.json
+            --function-name projectMetadataEnricher \
+            --payload '{}' \
+            --cli-binary-format raw-in-base64-out \
+            /tmp/out.json --region us-east-2
+          cat /tmp/out.json

@@ -151,6 +151,9 @@ def main():
 
     global last_api_id
     last_api_id = api_id
+    with open("api_id.txt", "w") as f:
+    f.write(api_id.strip())
+
 
 if __name__ == "__main__":
     main()

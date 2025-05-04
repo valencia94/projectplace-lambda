@@ -29,6 +29,10 @@ jobs:
 
       - name: 🧪 Smoke test enricher
         run: |
-          aws lambda invoke --function-name projectMetadataEnricher \
-            --payload '{}' /tmp/out.json --region us-east-2
+          aws lambda invoke \
+            --function-name projectMetadataEnricher \
+            --payload '{}' \
+            --cli-binary-format raw-in-base64-out \
+            /tmp/out.json --region us-east-2
           cat /tmp/out.json
+

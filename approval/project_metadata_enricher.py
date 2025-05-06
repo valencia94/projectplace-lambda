@@ -50,6 +50,7 @@ def get_all_cards(project_id, token):
         return json.loads(resp.read())
 
 def lambda_handler(event=None, context=None):
+    start_time = time.time()
     print("🚀 Starting full enrichment...")
     try:
         token = get_projectplace_token()
@@ -69,6 +70,9 @@ def lambda_handler(event=None, context=None):
         return {"statusCode": 404, "body": "No projects found"}
 
     for project_id in project_ids:
+            if time.time() - start_time > 540:
+                print("⏰ Lambda timeout protection triggered. Ending early.")
+                break
         print(f"🔄 Enriching project: {project_id}")
         try:
             cards = get_all_cards(project_id, token)
@@ -108,6 +112,7 @@ def lambda_handler(event=None, context=None):
                 }
 
                 ddb.put_item(Item=enriched_item)
+                    time.sleep(1)  # pacing for Dynamo write
                 print(f"✅ Updated card: {card_id}")
         except Exception as e:
             print(f"❌ Failed enrichment for project {project_id}: {e}")

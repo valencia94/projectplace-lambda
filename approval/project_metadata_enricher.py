@@ -1,8 +1,8 @@
 
 #!/usr/bin/env python3
-import os, json, time, uuid, boto3, requests
+import os, json, time, uuid, boto3
 from collections import defaultdict
-from urllib.parse import urljoin
+from urllib import request, parse, error
 
 REGION       = os.environ["AWS_REGION"]
 TABLE_NAME   = os.environ["DYNAMODB_TABLE_NAME"]
@@ -13,28 +13,41 @@ ddb     = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
 secrets = boto3.client("secretsmanager", region_name=REGION)
 
 def get_projectplace_token():
-    secret = secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"]
-    creds = json.loads(secret)
-    resp = requests.post(f"{API_BASE_URL}/oauth2/access_token", data={
+    sec = secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"]
+    creds = json.loads(sec)
+    data = parse.urlencode({
         "grant_type": "client_credentials",
         "client_id": creds["PROJECTPLACE_ROBOT_CLIENT_ID"],
         "client_secret": creds["PROJECTPLACE_ROBOT_CLIENT_SECRET"]
-    })
-    return resp.json().get("access_token")
+    }).encode()
+    req = request.Request(f"{API_BASE_URL}/oauth2/access_token", data=data)
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with request.urlopen(req) as resp:
+            return json.loads(resp.read())["access_token"]
+    except error.HTTPError as e:
+        raise Exception(f"Token request failed: {e.read().decode()}")
 
 def get_pm_email(project_id, token, creator_id):
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(f"{API_BASE_URL}/1/projects/{project_id}/members", headers=headers)
-    for member in resp.json():
-        if str(member.get("id")) == str(creator_id):
-            return member.get("email", ""), member.get("name", "")
+    url = f"{API_BASE_URL}/1/projects/{project_id}/members"
+    req = request.Request(url)
+    req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with request.urlopen(req) as resp:
+            members = json.loads(resp.read())
+            for m in members:
+                if str(m.get("id")) == str(creator_id):
+                    return m.get("email", ""), m.get("name", "")
+    except error.HTTPError as e:
+        print("⚠️ Member fetch failed:", e.read().decode())
     return "", ""
 
 def get_all_cards(project_id, token):
-    headers = {"Authorization": f"Bearer {token}"}
     url = f"{API_BASE_URL}/1/projects/{project_id}/cards"
-    resp = requests.get(url, headers=headers)
-    return resp.json()
+    req = request.Request(url)
+    req.add_header("Authorization", f"Bearer {token}")
+    with request.urlopen(req) as resp:
+        return json.loads(resp.read())
 
 def lambda_handler(event=None, context=None):
     print("🚀 Starting full enrichment...")

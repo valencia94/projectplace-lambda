@@ -13,7 +13,7 @@ print("🟢 STARTING deploy_send_approval_email.py")
 try:
     REGION       = require_env("AWS_REGION")
     ACCOUNT_ID   = require_env("AWS_ACCOUNT_ID")
-    TABLE_NAME   = require_env("DYNAMODB_TABLE_NAME")  # <- Correct key
+    TABLE_NAME   = require_env("DYNAMODB_TABLE_NAME")
     EMAIL_SOURCE = require_env("EMAIL_SOURCE")
     S3_BUCKET    = require_env("S3_BUCKET_NAME")
     API_ID       = require_env("ACTA_API_ID")

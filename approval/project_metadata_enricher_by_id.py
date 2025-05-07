@@ -100,8 +100,6 @@ def lambda_handler(event, _):
         return {"statusCode": 500, "body": f"Error: {str(e)}"}
 
     return {"statusCode": 200, "body": f"Enrichment complete for project {project_id}"}
-        sys.exit(1)
-    return val
 
 print("🟢 STARTING deploy_metadata_enricher.py")
 

@@ -170,4 +170,3 @@ try:
 
 except Exception as e:
     print("❌ DEPLOY FAILED:", str(e))
-    sys.exit(1)

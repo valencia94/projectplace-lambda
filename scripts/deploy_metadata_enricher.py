@@ -41,7 +41,7 @@ try:
         zipped_code = f.read()
 
     env_vars = {
-        "DYNAMODB_TABLE_NAME": TABLE_NAME,
+        "DYNAMODB_ENRICHMENT_TABLE": TABLE_NAME,
         "PROJECTPLACE_SECRET_NAME": SECRET_NAME
     }
 

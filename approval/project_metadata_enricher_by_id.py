@@ -42,7 +42,7 @@ def get_all_cards(project_id, token):
     with request.urlopen(req) as resp:
         return json.loads(resp.read())
 
-def lambda_handler(event, _):
+def lambda_handler(event=None, context=None):
     project_id = event.get("project_id")
     if not project_id:
         return {"statusCode": 400, "body": "Missing project_id"}
@@ -89,8 +89,8 @@ def lambda_handler(event, _):
 
             ddb.put_item(Item=item)
             print(f"✅ Updated card {cid}")
-            time.sleep(1)
+            time.sleep(0.05)
     except Exception as e:
-        return {"statusCode": 500, "body": f"Error: {str(e)}"}
+        return {"statusCode": 500, "body": f"Enrichment error: {str(e)}"}
 
     return {"statusCode": 200, "body": f"Enrichment complete for project {project_id}"}

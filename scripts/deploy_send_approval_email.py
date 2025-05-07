@@ -1,89 +1,78 @@
 #!/usr/bin/env python3
 """
-deploy_send_approval_email.py
-─────────────────────────────
-Idempotent deploy script for the sendApprovalEmail Lambda.
-Handles the common ‘update in progress’ race by waiting for the
-function to reach Active before pushing the env-var update.
+Package & (re)deploy the **sendApprovalEmail** Lambda.
+Reads env vars emitted by the workflow.
+
+Required env:
+  AWS_REGION                 e.g. us-east-2
+  AWS_ACCOUNT_ID
+  EMAIL_SOURCE               verified SES address
+  DYNAMODB_DATA_TABLE        landing v3 table   ←  **new canonical name**
+  S3_BUCKET_NAME
 """
 
-import os, sys, zipfile, time, boto3
+import os, sys, zipfile, boto3, shutil
 
-# ─── ENV ────────────────────────────────────────────────────────
 def need(k):
     v = os.getenv(k)
     if not v:
-        print(f"❌ Missing env var: {k}")
-        sys.exit(1)
+        print(f"❌ Missing env var: {k}"); sys.exit(1)
     return v
 
-REGION        = need("AWS_REGION")
-ACCOUNT_ID    = need("AWS_ACCOUNT_ID")
-EMAIL_SOURCE  = need("EMAIL_SOURCE")
-S3_BUCKET     = need("S3_BUCKET_NAME")
-DDB_TABLE     = need("DYNAMODB_DATA_TABLE")   # original table
-ACTA_API_ID   = need("ACTA_API_ID")
+# ── ENV ──────────────────────────────────────────────────────────────────────
+REGION       = need("AWS_REGION")
+ACCOUNT_ID   = need("AWS_ACCOUNT_ID")
+EMAIL_SRC    = need("EMAIL_SOURCE")
+DATA_TABLE   = need("DYNAMODB_DATA_TABLE")
+S3_BUCKET    = need("S3_BUCKET_NAME")
 
-FUNCTION  = "sendApprovalEmail"
-HANDLER   = "sendApprovalEmail.lambda_handler"
-ROLE_ARN  = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectplaceLambdaRole"
-ZIP_DIR   = "./deployment_zips"
-SRC_FILE  = "approval/sendApprovalEmail.py"
+ROLE_ARN   = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectplaceLambdaRole"
+FUNCTION   = "sendApprovalEmail"
+HANDLER    = "sendApprovalEmail.lambda_handler"
+RUNTIME    = "python3.9"
+ZIP_DIR    = "./deployment_zips"
+SRC_FILE   = "approval/sendApprovalEmail.py"
 
-# ─── ZIP CODE ───────────────────────────────────────────────────
+# ── ZIP PACKAGE ──────────────────────────────────────────────────────────────
+if os.path.exists(ZIP_DIR): shutil.rmtree(ZIP_DIR)
 os.makedirs(ZIP_DIR, exist_ok=True)
 zip_path = f"{ZIP_DIR}/{FUNCTION}.zip"
 with zipfile.ZipFile(zip_path, "w") as zf:
     zf.write(SRC_FILE, arcname=os.path.basename(SRC_FILE))
 print(f"📦  Created {zip_path}")
 
-# ─── DEPLOY ─────────────────────────────────────────────────────
-lambda_client = boto3.client("lambda", region_name=REGION)
-with open(zip_path, "rb") as f:
-    code_bytes = f.read()
-
-env_vars = {
+# ── DEPLOY / UPDATE ──────────────────────────────────────────────────────────
+env = {
     "AWS_REGION":          REGION,
-    "EMAIL_SOURCE":        EMAIL_SOURCE,
-    "S3_BUCKET_NAME":      S3_BUCKET,
-    "DYNAMODB_TABLE_NAME": DDB_TABLE,
-    "ACTA_API_ID":         ACTA_API_ID,
+    "EMAIL_SOURCE":        EMAIL_SRC,
+    "DYNAMODB_DATA_TABLE": DATA_TABLE,
+    "S3_BUCKET_NAME":      S3_BUCKET
 }
 
-def wait_until(fn_name: str, waiter: str):
-    w = lambda_client.get_waiter(waiter)
-    while True:
-        try:
-            w.wait(FunctionName=fn_name)
-            return
-        except lambda_client.exceptions.ResourceNotFoundException:
-            time.sleep(2)
+lambda_client = boto3.client("lambda", region_name=REGION)
+with open(zip_path, "rb") as f:
+    code_blob = f.read()
 
 try:
     lambda_client.get_function(FunctionName=FUNCTION)
-    print("🔁 Updating code …")
-    lambda_client.update_function_code(FunctionName=FUNCTION, ZipFile=code_bytes)
-    wait_until(FUNCTION, "function_updated")
-    print("⚙️  Updating environment …")
+    print("🔁 Updating Lambda code & env …")
+    lambda_client.update_function_code(FunctionName=FUNCTION, ZipFile=code_blob)
     lambda_client.update_function_configuration(
         FunctionName=FUNCTION,
-        Environment={"Variables": env_vars},
-        Timeout=60,            # keep at 60 s – e-mail send is quick
-        MemorySize=256,
+        Environment={"Variables": env}
     )
 except lambda_client.exceptions.ResourceNotFoundException:
-    print("🚀 Creating function …")
+    print("🚀 Creating Lambda …")
     lambda_client.create_function(
         FunctionName=FUNCTION,
-        Runtime="python3.9",
         Role=ROLE_ARN,
+        Runtime=RUNTIME,
         Handler=HANDLER,
-        Code={"ZipFile": code_bytes},
-        Timeout=60,
+        Code={"ZipFile": code_blob},
+        Timeout=120,
         MemorySize=256,
         Publish=True,
-        Environment={"Variables": env_vars},
+        Environment={"Variables": env}
     )
 
-arn = lambda_client.get_function(FunctionName=FUNCTION)["Configuration"]["FunctionArn"]
-print("✅ Deployed →", arn)
+print("✅ sendApprovalEmail Lambda ready")

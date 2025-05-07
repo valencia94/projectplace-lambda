@@ -34,7 +34,7 @@ jobs:
           PROJECTPLACE_SECRET_NAME:   ProjectPlaceAPICredentials
         run: |
           echo "⚙️ Running metadata enricher deploy script with 5-minute timeout"
-          python3 scripts/deploy_metadata_enricher_timeout300.py
+          python3 scripts/deploy_metadata_enricher.py
 
       - name: 🧪 Smoke Test Lambda
         run: |

@@ -1,7 +1,6 @@
 
 #!/usr/bin/env python3
 import os, json, time, uuid, boto3
-from collections import defaultdict
 from urllib import request, parse, error
 
 REGION       = os.environ["AWS_REGION"]
@@ -46,76 +45,70 @@ def get_all_cards(project_id, token):
     with request.urlopen(req) as resp:
         return json.loads(resp.read())
 
-def lambda_handler(event=None, context=None):
+def lambda_handler(event, context):
+    project_id = event.get("project_id")
+    if not project_id:
+        return {"statusCode": 400, "body": "Missing project_id"}
+
+    print(f"🚀 Enriching ProjectPlace project: {project_id}")
     start_time = time.time()
-    print("🚀 Starting full enrichment...")
 
     try:
         token = get_projectplace_token()
     except Exception as e:
-        print("❌ Auth failed:", e)
-        return {"statusCode": 500, "body": "Auth failure"}
+        print("❌ Token retrieval failed:", e)
+        return {"statusCode": 500, "body": "Token error"}
 
     try:
-        resp = ddb.scan()
-        items = resp.get("Items", [])
-        project_ids = list(set(i["project_id"] for i in items if "project_id" in i))
+        cards = get_all_cards(project_id, token)
     except Exception as e:
-        print("❌ DynamoDB scan failed:", e)
-        return {"statusCode": 500, "body": "Dynamo scan failure"}
+        print(f"❌ Card fetch failed for {project_id}:", e)
+        return {"statusCode": 500, "body": "Card fetch error"}
 
-    if not project_ids:
-        return {"statusCode": 404, "body": "No projects found"}
+    updated = 0
+    for card in cards:
+        card_id = card.get("id")
+        title = card.get("title", "")
+        comments = card.get("comments", [])
+        creator = card.get("creator", {})
+        creator_id = creator.get("id")
 
-    for project_id in project_ids:
-        if time.time() - start_time > 540:
-            print("⏰ Timeout limit reached. Ending early.")
-            break
+        client_email = comments[0] if title == "Client_Email" and isinstance(comments, list) and comments else ""
+        pm_email, pm_name = get_pm_email(project_id, token, creator_id)
 
-        print(f"🔄 Enriching project: {project_id}")
-        try:
-            cards = get_all_cards(project_id, token)
-            for card in cards:
-                card_id = card.get("id")
-                title = card.get("title", "")
-                comments = card.get("comments", [])
-                creator = card.get("creator", {})
-                creator_id = creator.get("id")
+        enriched_item = {
+            "project_id": str(project_id),
+            "card_id": str(card_id),
+            "title": title,
+            "description": card.get("description"),
+            "creator_id": str(creator_id),
+            "created_time": card.get("created_time"),
+            "client_email": client_email,
+            "pm_email": pm_email,
+            "pm_name": pm_name,
+            "board_id": card.get("board_id"),
+            "board_name": card.get("board_name"),
+            "column_id": card.get("column_id"),
+            "is_done": card.get("is_done"),
+            "is_blocked": card.get("is_blocked"),
+            "is_blocked_reason": card.get("is_blocked_reason"),
+            "checklist": card.get("checklist", []),
+            "comments": comments,
+            "progress": card.get("progress"),
+            "direct_url": card.get("direct_url"),
+            "approval_token": str(uuid.uuid4()),
+            "sent_timestamp": int(time.time()),
+            "status": "pending"
+        }
 
-                client_email = comments[0] if title == "Client_Email" and isinstance(comments, list) and comments else ""
-                pm_email, pm_name = get_pm_email(project_id, token, creator_id)
+        ddb.put_item(Item=enriched_item)
+        updated += 1
+        print(f"✅ Updated card: {card_id}")
+        time.sleep(0.5)
 
-                enriched_item = {
-                    "project_id": str(project_id),
-                    "card_id": str(card_id),
-                    "title": title,
-                    "description": card.get("description"),
-                    "creator_id": str(creator_id),
-                    "created_time": card.get("created_time"),
-                    "client_email": client_email,
-                    "pm_email": pm_email,
-                    "pm_name": pm_name,
-                    "board_id": card.get("board_id"),
-                    "board_name": card.get("board_name"),
-                    "column_id": card.get("column_id"),
-                    "is_done": card.get("is_done"),
-                    "is_blocked": card.get("is_blocked"),
-                    "is_blocked_reason": card.get("is_blocked_reason"),
-                    "checklist": card.get("checklist", []),
-                    "comments": comments,
-                    "progress": card.get("progress"),
-                    "direct_url": card.get("direct_url"),
-                    "approval_token": str(uuid.uuid4()),
-                    "sent_timestamp": int(time.time()),
-                    "status": "pending"
-                }
-
-                ddb.put_item(Item=enriched_item)
-                print(f"✅ Updated card: {card_id}")
-                time.sleep(1)  # pacing for DynamoDB
-        except Exception as e:
-            print(f"❌ Failed enrichment for project {project_id}: {e}")
-            continue
-
-    print("✅ Enrichment complete for all projects.")
-    return {"statusCode": 200, "body": "Enrichment complete."}
+    elapsed = time.time() - start_time
+    print(f"✅ Enrichment complete: {updated} cards in {elapsed:.1f}s")
+    return {
+        "statusCode": 200,
+        "body": json.dumps({"project_id": project_id, "cards_updated": updated, "duration": elapsed})
+    }

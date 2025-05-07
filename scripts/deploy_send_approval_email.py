@@ -61,7 +61,7 @@ try:
         client.update_function_configuration(
             FunctionName=FUNCTION,
             Environment={"Variables": env_vars},
-            Timeout=120
+            Timeout=300
         )
     except client.exceptions.ResourceNotFoundException:
         print("🚀 Creating new Lambda function...")
@@ -71,7 +71,7 @@ try:
             Role=ROLE_ARN,
             Handler=HANDLER,
             Code={"ZipFile": zipped_code},
-            Timeout=120,
+            Timeout=300,
             MemorySize=256,
             Publish=True,
             Environment={"Variables": env_vars}

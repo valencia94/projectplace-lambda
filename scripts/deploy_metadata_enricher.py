@@ -11,7 +11,6 @@ def require_env(key):
 print("🟢 STARTING deploy_metadata_enricher.py")
 
 try:
-    # ─── ENVIRONMENT ─────────────────────────────────────────────
     REGION       = require_env("AWS_REGION")
     ACCOUNT_ID   = require_env("AWS_ACCOUNT_ID")
     TABLE_NAME   = require_env("DYNAMODB_ENRICHMENT_TABLE")
@@ -53,10 +52,11 @@ try:
         print("⏳ Waiting for update to complete...")
         client.get_waiter("function_updated").wait(FunctionName=FUNCTION)
 
-        print("⚙️ Updating Lambda environment...")
+        print("⚙️ Updating Lambda environment and timeout...")
         client.update_function_configuration(
             FunctionName=FUNCTION,
-            Environment={"Variables": env_vars}
+            Environment={"Variables": env_vars},
+            Timeout=300
         )
     except client.exceptions.ResourceNotFoundException:
         print("🚀 Creating new Lambda function...")
@@ -66,7 +66,7 @@ try:
             Role=ROLE_ARN,
             Handler=HANDLER,
             Code={"ZipFile": zipped_code},
-            Timeout=120,
+            Timeout=300,
             MemorySize=256,
             Publish=True,
             Environment={"Variables": env_vars}

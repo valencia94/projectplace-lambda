@@ -14,7 +14,7 @@ try:
     # ─── ENVIRONMENT ─────────────────────────────────────────────
     REGION       = require_env("AWS_REGION")
     ACCOUNT_ID   = require_env("AWS_ACCOUNT_ID")
-    TABLE_NAME   = require_env("DYNAMODB_TABLE_NAME")
+    TABLE_NAME   = require_env("DYNAMODB_ENRICHMENT_TABLE")
     SECRET_NAME  = require_env("PROJECTPLACE_SECRET_NAME")
 
     FUNCTION     = "projectMetadataEnricher"

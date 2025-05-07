@@ -34,5 +34,6 @@ jobs:
           S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
           DYNAMODB_TABLE_NAME: ${{ secrets.DYNAMODB_TABLE_NAME }}
           EMAIL_SOURCE: ${{ secrets.EMAIL_SOURCE }}
-          DOMAIN: ${{ secrets.DOMAIN }}
+          DOMAIN: ${{ secrets.DOMAIN 
+          ACTA_API_ID: ${{ secrets.ACTA_API_ID }}  # ✅ ADD THIS LINE
         run: python3 scripts/deploy_send_approval_email.py

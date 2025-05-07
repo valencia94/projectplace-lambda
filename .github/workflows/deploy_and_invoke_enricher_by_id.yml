@@ -1,0 +1,47 @@
+name: Deploy and Run projectMetadataEnricherById
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: 'Project ID to enrich'
+        required: true
+        default: '1000000061690051'
+
+jobs:
+  deploy-and-invoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🧾 Checkout Code
+        uses: actions/checkout@v3
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: 📦 Install Dependencies
+        run: pip install boto3
+
+      - name: 🔐 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            us-east-2
+
+      - name: 🚀 Deploy projectMetadataEnricherById Lambda
+        env:
+          AWS_REGION:                 us-east-2
+          AWS_ACCOUNT_ID:             ${{ secrets.AWS_ACCOUNT_ID }}
+          DYNAMODB_ENRICHMENT_TABLE:  ProjectPlace_DataExtrator_landing_table_v2
+          PROJECTPLACE_SECRET_NAME:   ProjectPlaceAPICredentials
+        run: |
+          python3 scripts/deploy_metadata_enricher_by_id.py
+
+      - name: 🧪 Invoke Lambda with Input
+        run: |
+          echo "🧪 Enriching project_id: ${{ github.event.inputs.project_id }}"
+          aws lambda invoke             --function-name projectMetadataEnricherById             --payload '{ "project_id": "${{ github.event.inputs.project_id }}" }'             --cli-binary-format raw-in-base64-out             --region us-east-2             /tmp/enrich_output.json
+          cat /tmp/enrich_output.json

@@ -5,7 +5,7 @@ from collections import defaultdict
 from urllib import request, parse, error
 
 REGION       = os.environ["AWS_REGION"]
-TABLE_NAME   = os.environ["DYNAMODB_TABLE_NAME"]
+TABLE_NAME   = os.environ["DYNAMODB_ENRICHMENT_TABLE"]
 SECRET_NAME  = os.environ.get("PROJECTPLACE_SECRET_NAME", "ProjectPlaceAPICredentials")
 API_BASE_URL = "https://api.projectplace.com"
 
@@ -13,8 +13,8 @@ ddb     = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
 secrets = boto3.client("secretsmanager", region_name=REGION)
 
 def get_projectplace_token():
-    sec = secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"]
-    creds = json.loads(sec)
+    secret = secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"]
+    creds = json.loads(secret)
     data = parse.urlencode({
         "grant_type": "client_credentials",
         "client_id": creds["PROJECTPLACE_ROBOT_CLIENT_ID"],
@@ -22,11 +22,8 @@ def get_projectplace_token():
     }).encode()
     req = request.Request(f"{API_BASE_URL}/oauth2/access_token", data=data)
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    try:
-        with request.urlopen(req) as resp:
-            return json.loads(resp.read())["access_token"]
-    except error.HTTPError as e:
-        raise Exception(f"Token request failed: {e.read().decode()}")
+    with request.urlopen(req) as resp:
+        return json.loads(resp.read())["access_token"]
 
 def get_pm_email(project_id, token, creator_id):
     url = f"{API_BASE_URL}/1/projects/{project_id}/members"
@@ -52,6 +49,7 @@ def get_all_cards(project_id, token):
 def lambda_handler(event=None, context=None):
     start_time = time.time()
     print("🚀 Starting full enrichment...")
+
     try:
         token = get_projectplace_token()
     except Exception as e:
@@ -70,9 +68,10 @@ def lambda_handler(event=None, context=None):
         return {"statusCode": 404, "body": "No projects found"}
 
     for project_id in project_ids:
-            if time.time() - start_time > 540:
-                print("⏰ Lambda timeout protection triggered. Ending early.")
-                break
+        if time.time() - start_time > 540:
+            print("⏰ Timeout limit reached. Ending early.")
+            break
+
         print(f"🔄 Enriching project: {project_id}")
         try:
             cards = get_all_cards(project_id, token)
@@ -112,8 +111,8 @@ def lambda_handler(event=None, context=None):
                 }
 
                 ddb.put_item(Item=enriched_item)
-                    time.sleep(1)  # pacing for Dynamo write
                 print(f"✅ Updated card: {card_id}")
+                time.sleep(1)  # pacing for DynamoDB
         except Exception as e:
             print(f"❌ Failed enrichment for project {project_id}: {e}")
             continue

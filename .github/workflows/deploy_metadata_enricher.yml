@@ -1,4 +1,5 @@
 name: Deploy Metadata Enricher
+
 on:
   workflow_dispatch:
 
@@ -29,13 +30,13 @@ jobs:
         env:
           AWS_REGION:               us-east-2
           AWS_ACCOUNT_ID:           ${{ secrets.AWS_ACCOUNT_ID }}
-          DYNAMODB_ENRICHMENT_TABLE:      ProjectPlace_DataExtrator_landing_table_v2
+          DYNAMODB_ENRICHMENT_TABLE: ProjectPlace_DataExtrator_landing_table_v2
           PROJECTPLACE_SECRET_NAME: ProjectPlaceAPICredentials
         run: |
           echo "⚙️ Running metadata enricher deploy script"
           python3 scripts/deploy_metadata_enricher.py
 
-      - name: ✅ Smoke Test Lambda
+      - name: 🧪 Smoke Test Lambda
         run: |
           echo "🧪 Invoking Lambda to test deployment"
           aws lambda invoke \

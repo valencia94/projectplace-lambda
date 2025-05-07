@@ -1,7 +1,5 @@
-
 #!/usr/bin/env python3
 import os, json, time, uuid, boto3
-from collections import defaultdict
 from urllib import request, parse, error
 
 REGION       = os.environ["AWS_REGION"]
@@ -13,8 +11,7 @@ ddb     = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
 secrets = boto3.client("secretsmanager", region_name=REGION)
 
 def get_projectplace_token():
-    secret = secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"]
-    creds = json.loads(secret)
+    creds = json.loads(secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"])
     data = parse.urlencode({
         "grant_type": "client_credentials",
         "client_id": creds["PROJECTPLACE_ROBOT_CLIENT_ID"],
@@ -31,8 +28,7 @@ def get_pm_email(project_id, token, creator_id):
     req.add_header("Authorization", f"Bearer {token}")
     try:
         with request.urlopen(req) as resp:
-            members = json.loads(resp.read())
-            for m in members:
+            for m in json.loads(resp.read()):
                 if str(m.get("id")) == str(creator_id):
                     return m.get("email", ""), m.get("name", "")
     except error.HTTPError as e:
@@ -47,36 +43,24 @@ def get_all_cards(project_id, token):
         return json.loads(resp.read())
 
 def lambda_handler(event=None, context=None):
-    start_time = time.time()
-    print("🚀 Starting full enrichment...")
+    print("🚀 Starting full project metadata enrichment...")
 
-    try:
-        token = get_projectplace_token()
-    except Exception as e:
-        print("❌ Auth failed:", e)
-        return {"statusCode": 500, "body": "Auth failure"}
+    token = get_projectplace_token()
 
+    # Scan the table for all project_ids
     try:
-        resp = ddb.scan()
-        items = resp.get("Items", [])
+        scan = ddb.scan()
+        items = scan.get("Items", [])
         project_ids = list(set(i["project_id"] for i in items if "project_id" in i))
     except Exception as e:
-        print("❌ DynamoDB scan failed:", e)
-        return {"statusCode": 500, "body": "Dynamo scan failure"}
-
-    if not project_ids:
-        return {"statusCode": 404, "body": "No projects found"}
+        return {"statusCode": 500, "body": f"DynamoDB scan failed: {str(e)}"}
 
     for project_id in project_ids:
-        if time.time() - start_time > 540:
-            print("⏰ Timeout limit reached. Ending early.")
-            break
-
         print(f"🔄 Enriching project: {project_id}")
         try:
             cards = get_all_cards(project_id, token)
             for card in cards:
-                card_id = card.get("id")
+                cid = card.get("id")
                 title = card.get("title", "")
                 comments = card.get("comments", [])
                 creator = card.get("creator", {})
@@ -85,9 +69,9 @@ def lambda_handler(event=None, context=None):
                 client_email = comments[0] if title == "Client_Email" and isinstance(comments, list) and comments else ""
                 pm_email, pm_name = get_pm_email(project_id, token, creator_id)
 
-                enriched_item = {
+                item = {
                     "project_id": str(project_id),
-                    "card_id": str(card_id),
+                    "card_id": str(cid),
                     "title": title,
                     "description": card.get("description"),
                     "creator_id": str(creator_id),
@@ -110,12 +94,12 @@ def lambda_handler(event=None, context=None):
                     "status": "pending"
                 }
 
-                ddb.put_item(Item=enriched_item)
-                print(f"✅ Updated card: {card_id}")
-                time.sleep(1)  # pacing for DynamoDB
+                ddb.put_item(Item=item)
+                print(f"✅ Updated card {cid}")
+                time.sleep(1)
         except Exception as e:
-            print(f"❌ Failed enrichment for project {project_id}: {e}")
+            print(f"❌ Failed project {project_id}: {str(e)}")
             continue
 
-    print("✅ Enrichment complete for all projects.")
-    return {"statusCode": 200, "body": "Enrichment complete."}
+    print("✅ All enrichment completed.")
+    return {"statusCode": 200, "body": "All projects enriched."}

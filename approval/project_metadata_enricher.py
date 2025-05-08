@@ -7,7 +7,7 @@ API_BASE_URL = "https://api.projectplace.com"
 
 REGION      = os.environ["AWS_REGION"]
 TABLE_NAME  = os.environ["DYNAMODB_ENRICHMENT_TABLE"]
-SECRET_NAME = os.environ["PROJECTPLACE_SECRET_NAME"]
+SECRET_NAME = os.environ["SECRET_NAME"]
 
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 secrets  = boto3.client("secretsmanager", region_name=REGION)

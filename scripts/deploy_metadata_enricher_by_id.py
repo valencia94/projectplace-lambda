@@ -14,7 +14,7 @@ try:
     REGION       = require_env("AWS_REGION")
     ACCOUNT_ID   = require_env("AWS_ACCOUNT_ID")
     TABLE_NAME   = require_env("DYNAMODB_ENRICHMENT_TABLE")
-    SECRET_NAME  = require_env("PROJECTPLACE_SECRET_NAME")
+    SECRET_NAME  = require_env("SECRET_NAME")
 
     FUNCTION     = "projectMetadataEnricherById"
     HANDLER      = "project_metadata_enricher_by_id.lambda_handler"
@@ -41,7 +41,7 @@ try:
 
     env_vars = {
         "DYNAMODB_ENRICHMENT_TABLE": TABLE_NAME,
-        "PROJECTPLACE_SECRET_NAME": SECRET_NAME
+        "SECRET_NAME": SECRET_NAME
     }
 
     try:

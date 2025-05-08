@@ -22,6 +22,13 @@ def get_projectplace_token():
     with request.urlopen(req) as resp:
         return json.loads(resp.read())["access_token"]
 
+def get_all_projects(token):
+    url = f"{API_BASE_URL}/1/projects"
+    req = request.Request(url)
+    req.add_header("Authorization", f"Bearer {token}")
+    with request.urlopen(req) as resp:
+        return json.loads(resp.read())
+
 def get_pm_email(project_id, token, creator_id):
     url = f"{API_BASE_URL}/1/projects/{project_id}/members"
     req = request.Request(url)
@@ -43,22 +50,15 @@ def get_all_cards(project_id, token):
         return json.loads(resp.read())
 
 def lambda_handler(event=None, context=None):
-    print("🚀 Starting full project metadata enrichment...")
-
+    print("🚀 Starting full enrichment...")
     token = get_projectplace_token()
+    projects = get_all_projects(token)
 
-    # Scan the table for all project_ids
-    try:
-        scan = ddb.scan()
-        items = scan.get("Items", [])
-        project_ids = list(set(i["project_id"] for i in items if "project_id" in i))
-    except Exception as e:
-        return {"statusCode": 500, "body": f"DynamoDB scan failed: {str(e)}"}
-
-    for project_id in project_ids:
-        print(f"🔄 Enriching project: {project_id}")
+    for p in projects:
+        pid = str(p.get("id"))
+        print(f"🔄 Enriching project: {pid}")
         try:
-            cards = get_all_cards(project_id, token)
+            cards = get_all_cards(pid, token)
             for card in cards:
                 cid = card.get("id")
                 title = card.get("title", "")
@@ -67,10 +67,10 @@ def lambda_handler(event=None, context=None):
                 creator_id = creator.get("id")
 
                 client_email = comments[0] if title == "Client_Email" and isinstance(comments, list) and comments else ""
-                pm_email, pm_name = get_pm_email(project_id, token, creator_id)
+                pm_email, pm_name = get_pm_email(pid, token, creator_id)
 
                 item = {
-                    "project_id": str(project_id),
+                    "project_id": pid,
                     "card_id": str(cid),
                     "title": title,
                     "description": card.get("description"),
@@ -96,10 +96,9 @@ def lambda_handler(event=None, context=None):
 
                 ddb.put_item(Item=item)
                 print(f"✅ Updated card {cid}")
-                time.sleep(1)
+                time.sleep(0.05)
         except Exception as e:
-            print(f"❌ Failed project {project_id}: {str(e)}")
-            continue
+            print(f"❌ Error in project {pid}: {str(e)}")
 
-    print("✅ All enrichment completed.")
-    return {"statusCode": 200, "body": "All projects enriched."}
+    print("✅ Enrichment complete for all projects.")
+    return {"statusCode": 200, "body": "All projects enriched"}

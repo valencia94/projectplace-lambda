@@ -31,12 +31,11 @@ jobs:
 
       - name: 🚀 Deploy projectMetadataEnricherById Lambda
         env:
-          AWS_REGION:                 us-east-2
-          AWS_ACCOUNT_ID:             ${{ secrets.AWS_ACCOUNT_ID }}
-          DYNAMODB_ENRICHMENT_TABLE:  ProjectPlace_DataExtrator_landing_table_v2
-          PROJECTPLACE_SECRET_NAME:   ProjectPlaceAPICredentials
-        run: |
-          python3 scripts/deploy_metadata_enricher_by_id.py
+          AWS_REGION:               ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID:           ${{ secrets.AWS_ACCOUNT_ID }}
+          DYNAMODB_ENRICHMENT_TABLE:${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+          PROJECTPLACE_SECRET_NAME: ${{ secrets.SECRET_NAME }}
+        run: python3 scripts/deploy_metadata_enricher_by_id.py
 
       - name: 🧪 Enrich single project by ID
         run: |

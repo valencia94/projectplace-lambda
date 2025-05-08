@@ -1,14 +1,13 @@
-name: Deploy Metadata Enricher
+name: Deploy and Invoke projectMetadataEnricher (ALL Projects)
 
 on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  deploy-and-run-all:
     runs-on: ubuntu-latest
-
     steps:
-      - name: 🧾 Checkout Code
+      - name: ⬇️ Checkout repo
         uses: actions/checkout@v3
 
       - name: 🐍 Setup Python
@@ -16,33 +15,27 @@ jobs:
         with:
           python-version: "3.9"
 
-      - name: 📦 Install Dependencies
+      - name: 📦 Install boto3
         run: pip install boto3
 
-      - name: 🔐 Configure AWS Credentials
+      - name: 🔐 Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            us-east-2
 
-      - name: 🚀 Deploy Metadata Enricher Lambda
+      - name: 🚀 Deploy projectMetadataEnricher Lambda
         env:
           AWS_REGION:                 us-east-2
           AWS_ACCOUNT_ID:             ${{ secrets.AWS_ACCOUNT_ID }}
           DYNAMODB_ENRICHMENT_TABLE:  ProjectPlace_DataExtrator_landing_table_v2
           PROJECTPLACE_SECRET_NAME:   ProjectPlaceAPICredentials
         run: |
-          echo "⚙️ Running metadata enricher deploy script with 10-minute timeout"
-          python3 scripts/deploy_metadata_enricher.py
+          python3 scripts/deploy_metadata_enricher_by_id.py
 
-      - name: 🧪 Smoke Test Lambda
+      - name: 🧪 Invoke enrichment across all projects
         run: |
-          echo "🧪 Invoking Lambda to test deployment"
-          aws lambda invoke \
-            --function-name projectMetadataEnricher \
-            --payload '{}' \
-            --cli-binary-format raw-in-base64-out \
-            /tmp/output.json \
-            --region us-east-2
-          cat /tmp/output.json
+          echo "🧪 Running metadata enrichment (ALL)"
+          aws lambda invoke             --function-name projectMetadataEnricher             --payload '{}'             --cli-binary-format raw-in-base64-out             /tmp/enrich_all_output.json             --region us-east-2
+          cat /tmp/enrich_all_output.json

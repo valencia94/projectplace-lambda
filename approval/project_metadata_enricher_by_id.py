@@ -4,7 +4,7 @@ from urllib import request, parse, error
 
 REGION       = os.environ["AWS_REGION"]
 TABLE_NAME   = os.environ["DYNAMODB_ENRICHMENT_TABLE"]
-SECRET_NAME  = os.environ.get("PROJECTPLACE_SECRET_NAME", "ProjectPlaceAPICredentials")
+SECRET_NAME  = os.environ.get("SECRET_NAME", "ProjectPlaceAPICredentials")
 API_BASE_URL = "https://api.projectplace.com"
 
 ddb     = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)

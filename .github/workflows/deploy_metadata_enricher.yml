@@ -1,4 +1,4 @@
-name: Deploy and Invoke projectMetadataEnricher (ALL Projects, Async)
+name: Deploy and Invoke projectMetadataEnricher (ALL Projects)
 
 on:
   workflow_dispatch:
@@ -27,15 +27,14 @@ jobs:
 
       - name: 🚀 Deploy projectMetadataEnricher Lambda
         env:
-          AWS_REGION:                 us-east-2
-          AWS_ACCOUNT_ID:             ${{ secrets.AWS_ACCOUNT_ID }}
-          DYNAMODB_ENRICHMENT_TABLE:  ProjectPlace_DataExtrator_landing_table_v2
-          PROJECTPLACE_SECRET_NAME:   ProjectPlaceAPICredentials
-        run: |
-          python3 scripts/deploy_metadata_enricher_by_id.py
+          AWS_REGION:               ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID:           ${{ secrets.AWS_ACCOUNT_ID }}
+          DYNAMODB_ENRICHMENT_TABLE:${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+          PROJECTPLACE_SECRET_NAME: ${{ secrets.SECRET_NAME }}
+        run: python3 scripts/deploy_metadata_enricher.py
 
-      - name: 📤 Invoke Lambda (async)
+      - name: 🧪 Invoke enrichment across all projects
         run: |
-          echo "🚀 Triggering projectMetadataEnricher asynchronously"
-          aws lambda invoke             --function-name projectMetadataEnricher             --payload '{}'             --cli-binary-format raw-in-base64-out             /dev/null             --region us-east-2
-          echo "✅ Lambda invoked successfully (async). Check CloudWatch for execution logs."
+          echo "🧪 Running metadata enrichment (ALL)"
+          aws lambda invoke             --function-name projectMetadataEnricher             --payload '{}'             --cli-binary-format raw-in-base64-out             /tmp/enrich_all_output.json             --region us-east-2
+          cat /tmp/enrich_all_output.json

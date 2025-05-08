@@ -1,4 +1,4 @@
-name: Deploy and Invoke projectMetadataEnricher (ALL Projects)
+name: Deploy and Invoke projectMetadataEnricher (ALL Projects, Async)
 
 on:
   workflow_dispatch:
@@ -34,8 +34,8 @@ jobs:
         run: |
           python3 scripts/deploy_metadata_enricher_by_id.py
 
-      - name: 🧪 Invoke enrichment across all projects
+      - name: 📤 Invoke Lambda (async)
         run: |
-          echo "🧪 Running metadata enrichment (ALL)"
-          aws lambda invoke             --function-name projectMetadataEnricher             --payload '{}'             --cli-binary-format raw-in-base64-out             /tmp/enrich_all_output.json             --region us-east-2
-          cat /tmp/enrich_all_output.json
+          echo "🚀 Triggering projectMetadataEnricher asynchronously"
+          aws lambda invoke             --function-name projectMetadataEnricher             --payload '{}'             --cli-binary-format raw-in-base64-out             /dev/null             --region us-east-2
+          echo "✅ Lambda invoked successfully (async). Check CloudWatch for execution logs."

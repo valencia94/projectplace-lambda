@@ -40,12 +40,13 @@ jobs:
             --function-name $FUNCTION_NAME \
             --zip-file fileb://$ZIP_FILE
 
-      - name: Invoke with test project_id
+      - name: Invoke by-project enricher
         run: |
           aws lambda invoke \
             --function-name $FUNCTION_NAME \
             --cli-binary-format raw-in-base64-out \
-            --payload '{"project_id":"'"$TEST_PID"'"}' out.json
+            --payload "{\"project_id\":\"$TEST_PID\"}" \
+            out.json
           cat out.json
 
       - name: Ensure ≥1 row now exists

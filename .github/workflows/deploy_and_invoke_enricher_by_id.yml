@@ -1,44 +1,59 @@
-name: Deploy and Invoke projectMetadataEnricherById
+name: Deploy → projectMetadataEnricherById (one-project)
 
 on:
-  workflow_dispatch:
-    inputs:
-      project_id:
-        description: "Enter the ProjectPlace project_id to enrich"
-        required: true
+  push:
+    paths:
+      - lambdas/project_metadata_enricher_by_id.py
+      - .github/workflows/deploy_metadata_enricher_by_id.yml
 
 jobs:
-  deploy-and-enrich:
+  deploy-and-test:
     runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write          # OIDC to AWS
+      contents: read
+
+    env:
+      FUNCTION_NAME: projectMetadataEnricherById
+      ZIP_FILE: project_metadata_enricher_by_id.zip
+      REGION: us-east-2
+
     steps:
-      - name: ⬇️ Checkout repo
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
+      - name: Configure AWS creds via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          python-version: "3.9"
+          role-to-assume: ${{ secrets.AWS_GHA_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
 
-      - name: 📦 Install boto3
-        run: pip install boto3
-
-      - name: 🔐 Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            us-east-2
-
-      - name: 🚀 Deploy projectMetadataEnricherById Lambda
-        env:
-          AWS_REGION:               ${{ secrets.AWS_REGION }}
-          AWS_ACCOUNT_ID:           ${{ secrets.AWS_ACCOUNT_ID }}
-          DYNAMODB_ENRICHMENT_TABLE: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}  # ✅
-          SECRET_NAME: ${{ secrets.SECRET_NAME }}
-        run: python3 scripts/deploy_metadata_enricher_by_id.py
-
-      - name: 🧪 Enrich single project by ID
+      - name: Create deployment ZIP
         run: |
-          echo "🧪 Enriching project_id: ${{ github.event.inputs.project_id }}"
-          aws lambda invoke             --function-name projectMetadataEnricherById             --payload '{"project_id": "${{ github.event.inputs.project_id }}"}'             --cli-binary-format raw-in-base64-out             /tmp/enrich_output.json             --region us-east-2
-          cat /tmp/enrich_output.json
+          zip -j $ZIP_FILE lambdas/project_metadata_enricher_by_id.py
+
+      - name: Update Lambda code
+        run: |
+          aws lambda update-function-code \
+            --function-name $FUNCTION_NAME \
+            --zip-file fileb://$ZIP_FILE
+
+      - name: Smoke-invoke with test project_id
+        run: |
+          aws lambda invoke \
+            --function-name $FUNCTION_NAME \
+            --cli-binary-format raw-in-base64-out \
+            --payload '{"project_id":"'"${{ secrets.TEST_PROJECT_ID }}"'"}' \
+            out.json
+          cat out.json
+
+      - name: Assert DynamoDB wrote at least one row
+        run: |
+          COUNT=$(aws dynamodb query \
+            --table-name ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }} \
+            --key-condition-expression 'project_id = :p' \
+            --expression-attribute-values '{":p":{"S":"'"${{ secrets.TEST_PROJECT_ID }}"'"}}' \
+            --query 'Count' --output text)
+          echo "Rows written = $COUNT"
+          test "$COUNT" -gt 0

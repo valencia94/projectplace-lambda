@@ -1,6 +1,8 @@
 name: Deploy → projectMetadataEnricherById
 
 on:
+  workflow_dispatch:  # ✅ This enables the 'Run workflow' button
+  
   push:
     paths:
       - approval/project_metadata_enricher_by_id.py

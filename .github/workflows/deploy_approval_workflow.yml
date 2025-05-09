@@ -1,59 +1,46 @@
-name: Deploy → projectMetadataEnricherById (one-project)
+name: Deploy → handleApprovalCallback
 
 on:
+  workflow_dispatch:  # ✅ This enables the 'Run workflow' button
+  
   push:
     paths:
-      - lambdas/project_metadata_enricher_by_id.py
-      - .github/workflows/deploy_metadata_enricher_by_id.yml
+      - approval/handle_approval_callback.py
+      - .github/workflows/deploy_approval_workflow.yml
 
 jobs:
-  deploy-and-test:
+  deploy-test:
     runs-on: ubuntu-latest
-
-    permissions:
-      id-token: write          # OIDC to AWS
-      contents: read
-
     env:
-      FUNCTION_NAME: projectMetadataEnricherById
-      ZIP_FILE: project_metadata_enricher_by_id.zip
-      REGION: us-east-2
+      REGION:        ${{ secrets.AWS_REGION || 'us-east-2' }}
+      FUNCTION_NAME: handleApprovalCallback
+      ZIP_FILE:      handle_approval_callback.zip
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configure AWS creds via OIDC
+      - name: AWS creds
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_GHA_ROLE_ARN }}
-          aws-region: ${{ env.REGION }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.REGION }}
 
-      - name: Create deployment ZIP
-        run: |
-          zip -j $ZIP_FILE lambdas/project_metadata_enricher_by_id.py
+      - run: aws sts get-caller-identity
 
-      - name: Update Lambda code
+      - run: zip -j $ZIP_FILE approval/handle_approval_callback.py
+
+      - name: Update code
         run: |
           aws lambda update-function-code \
             --function-name $FUNCTION_NAME \
             --zip-file fileb://$ZIP_FILE
 
-      - name: Smoke-invoke with test project_id
+      # optional ping test (comment out if API Gateway handles callbacks)
+      - name: Unit invoke
         run: |
           aws lambda invoke \
             --function-name $FUNCTION_NAME \
             --cli-binary-format raw-in-base64-out \
-            --payload '{"project_id":"'"${{ secrets.TEST_PROJECT_ID }}"'"}' \
-            out.json
+            --payload '{"token":"healthcheck"}' out.json
           cat out.json
-
-      - name: Assert DynamoDB wrote at least one row
-        run: |
-          COUNT=$(aws dynamodb query \
-            --table-name ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }} \
-            --key-condition-expression 'project_id = :p' \
-            --expression-attribute-values '{":p":{"S":"'"${{ secrets.TEST_PROJECT_ID }}"'"}}' \
-            --query 'Count' --output text)
-          echo "Rows written = $COUNT"
-          test "$COUNT" -gt 0

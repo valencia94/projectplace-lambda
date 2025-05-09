@@ -1,38 +1,48 @@
-name: Deploy Approval Workflow
+name: Deploy → sendApprovalEmail
 
 on:
   workflow_dispatch:  # ✅ This enables the 'Run workflow' button
-
+  
   push:
     paths:
-      - 'scripts/deploy_send_approval_email.py'
-      - 'approval/**'
-      - 'config/**'
+      - approval/send_approval_email.py
+      - .github/workflows/deploy_approval.yml
 
 jobs:
-  deploy-approval:
+  deploy-test:
     runs-on: ubuntu-latest
+    env:
+      REGION:           ${{ secrets.AWS_REGION || 'us-east-2' }}
+      FUNCTION_NAME:    sendApprovalEmail
+      ZIP_FILE:         send_approval_email.zip
+      EMAIL_SOURCE:     ${{ secrets.EMAIL_SOURCE }}
+      TEST_PID:         ${{ secrets.TEST_PROJECT_ID }}
 
     steps:
-      - name: 📥 Checkout source code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: 🔐 Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+      - name: AWS creds
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region:            ${{ env.REGION }}
 
-      - name: 📦 Install Python dependencies
-        run: pip install boto3
+      - run: aws sts get-caller-identity
 
-      - name: 🚀 Run sendApprovalEmail deployment
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
-          DYNAMODB_TABLE_NAME: ${{ secrets.DYNAMODB_TABLE_NAME }}
-          EMAIL_SOURCE: ${{ secrets.EMAIL_SOURCE }}
-          ACTA_API_ID: ${{ secrets.ACTA_API_ID }}  # ✅ ADD THIS LINE
-        run: python3 scripts/deploy_send_approval_email.py
+      - run: zip -j $ZIP_FILE approval/send_approval_email.py
+
+      - name: Update code
+        run: |
+          aws lambda update-function-code \
+            --function-name $FUNCTION_NAME \
+            --zip-file fileb://$ZIP_FILE
+
+      - name: Dry-run invoke (no email sent)
+        run: |
+          aws lambda invoke \
+            --function-name $FUNCTION_NAME \
+            --cli-binary-format raw-in-base64-out \
+            --payload '{"project_id":"'"$TEST_PID"'", "dry_run": true, "email_source": "'"$EMAIL_SOURCE"'" }' \
+            out.json
+          cat out.json

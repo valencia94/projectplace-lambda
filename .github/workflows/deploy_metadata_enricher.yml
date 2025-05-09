@@ -11,23 +11,25 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      id-token: write
+      id-token: write       # OIDC for AWS
       contents: read
 
     env:
       FUNCTION_NAME: projectMetadataEnricher
       ZIP_FILE: project_metadata_enricher.zip
       REGION: us-east-2
+      TABLE_NAME: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+      TEST_PID:  ${{ secrets.TEST_PROJECT_ID }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS creds via OIDC
+      - name: Configure AWS creds
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GHA_ROLE_ARN }}
-          aws-region: ${{ env.REGION }}
+          aws-region:      ${{ env.REGION }}
 
       - name: Create deployment ZIP
         run: |
@@ -39,14 +41,44 @@ jobs:
             --function-name $FUNCTION_NAME \
             --zip-file fileb://$ZIP_FILE
 
-      - name: Invoke full enrichment in DRY_RUN mode
-        # DRY_RUN env var prevents Dynamo writes on CI yet still exercises API calls
+      - name: Count rows BEFORE invoke
+        id: precheck
+        run: |
+          BEFORE=$(aws dynamodb query \
+            --table-name $TABLE_NAME \
+            --key-condition-expression 'project_id = :p' \
+            --expression-attribute-values '{":p":{"S":"'"$TEST_PID"'"}}' \
+            --query 'Count' --output text)
+          echo "before=$BEFORE" >> "$GITHUB_OUTPUT"
+
+      - name: Invoke full enrichment (DRY_RUN=false)
         run: |
           aws lambda invoke \
             --function-name $FUNCTION_NAME \
             --cli-binary-format raw-in-base64-out \
-            --payload '{}' \
-            --qualifier '$LATEST' \
-            --env-vars '{"DRY_RUN":"1"}' \
-            out.json
+            --payload '{}' out.json
           cat out.json
+
+      - name: Count rows AFTER invoke
+        id: postcheck
+        run: |
+          AFTER=$(aws dynamodb query \
+            --table-name $TABLE_NAME \
+            --key-condition-expression 'project_id = :p' \
+            --expression-attribute-values '{":p":{"S":"'"$TEST_PID"'"}}' \
+            --query 'Count' --output text)
+          echo "after=$AFTER" >> "$GITHUB_OUTPUT"
+
+      - name: Assert at least one row exists and Δ > 0 on an empty table
+        run: |
+          BEFORE=${{ steps.precheck.outputs.before }}
+          AFTER=${{ steps.postcheck.outputs.after }}
+          echo "Rows before: $BEFORE  •  after: $AFTER"
+          if [ "$AFTER" -eq 0 ]; then
+            echo "::error ::No rows for test project_id"
+            exit 1
+          fi
+          if [ "$BEFORE" -eq "$AFTER" ] && [ "$BEFORE" -eq 0 ]; then
+            echo "::error ::No new rows and table was empty"
+            exit 1
+          fi

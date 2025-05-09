@@ -1,6 +1,8 @@
 name: Deploy → projectMetadataEnricher (ALL projects)
 
 on:
+  workflow_dispatch:  # ✅ This enables the 'Run workflow' button
+  
   push:
     paths:
       - lambdas/project_metadata_enricher.py

@@ -38,11 +38,20 @@ jobs:
             --function-name $FUNCTION_NAME \
             --zip-file fileb://$ZIP_FILE
 
+      - name: Sanity-check TEST_ACTA_ID
+        run: |
+          if [ -z "${{ secrets.TEST_ACTA_ID }}" ]; then
+            echo "::error ::TEST_ACTA_ID secret missing"; exit 1; fi
+
       - name: Dry-run invoke (no email sent)
         run: |
-          aws lambda invoke \
-            --function-name $FUNCTION_NAME \
-            --cli-binary-format raw-in-base64-out \
-            --payload '{"project_id":"'"$TEST_PID"'", "dry_run": true, "email_source": "'"$EMAIL_SOURCE"'" }' \
-            out.json
-          cat out.json
+          - aws lambda invoke \
+          -   --function-name $FUNCTION_NAME \
+          -   --cli-binary-format raw-in-base64-out \
+          -   --payload '{"acta_id":"DUMMY_ACTA_ID", "dry_run": true, "email_source": "'"$EMAIL_SOURCE"'" }' \
+          -   out.json
+          + aws lambda invoke \
+          +   --function-name $FUNCTION_NAME \
+          +   --cli-binary-format raw-in-base64-out \
+          +   --payload '{"acta_id":"'"${{ secrets.TEST_ACTA_ID }}"'", "dry_run": true, "email_source": "'"$EMAIL_SOURCE"'" }' \
+          +   out.json

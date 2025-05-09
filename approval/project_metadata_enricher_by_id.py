@@ -68,6 +68,8 @@ def lambda_handler(event: Optional[dict] = None, context=None):
     print(f"🚀 Enriching project {project_id} → table {TABLE_NAME}")
     token = get_projectplace_token()
 
+    writes = 0  # <── initialise once, before the loop
+    
     try:
         for card in get_all_cards(project_id, token):
             cid        = card.get("id")
@@ -106,16 +108,29 @@ def lambda_handler(event: Optional[dict] = None, context=None):
                 "sent_timestamp":  int(time.time()),
                 "status":          "pending",
             }
+            
+            try:
+                ddb.put_item(
+                    Item=item,
+                    ConditionExpression="attribute_not_exists(card_id)"
+                )
+                writes += 1
+                print(f"✅ Inserted card {cid}")
+            except ddb.meta.client.exceptions.ConditionalCheckFailedException:
+                print(f"↩️  Skipped existing card {cid}")
 
-            ddb.put_item(
-                Item=item,
-                ConditionExpression="attribute_not_exists(card_id)"
-            )
-            print(f"✅ Upserted card {cid} into {TABLE_NAME}")
-            time.sleep(0.05)
+            time.sleep(0.05)  # keep rate-friendly pause
 
     except Exception as e:  # broad-catch → logged, caller sees 500
         print("❌ Enrichment error:", e)
         return {"statusCode": 500, "body": f"Enrichment error: {e}"}
 
-    return {"statusCode": 200, "body": f"Enrichment complete for project {project_id}"} 
+    # ---------- success response --------------------------------------------
+    return {
+        "statusCode": 200,
+        "body": (
+            f"Enrichment complete for project {project_id} "
+            f"(new_rows={writes})"
+        )
+    }
+

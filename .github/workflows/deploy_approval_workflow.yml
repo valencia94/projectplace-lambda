@@ -1,64 +1,59 @@
-name: Deploy Acta Approval Workflow
+name: Deploy → projectMetadataEnricherById (one-project)
 
 on:
-  workflow_dispatch:
+  push:
+    paths:
+      - lambdas/project_metadata_enricher_by_id.py
+      - .github/workflows/deploy_metadata_enricher_by_id.yml
 
 jobs:
-  deploy-approval:
+  deploy-and-test:
     runs-on: ubuntu-latest
 
+    permissions:
+      id-token: write          # OIDC to AWS
+      contents: read
+
+    env:
+      FUNCTION_NAME: projectMetadataEnricherById
+      ZIP_FILE: project_metadata_enricher_by_id.zip
+      REGION: us-east-2
+
     steps:
-      - name: 🧾 Checkout Code
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
+      - name: Configure AWS creds via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          python-version: "3.9"
+          role-to-assume: ${{ secrets.AWS_GHA_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
 
-      - name: 📦 Install boto3
-        run: pip install boto3
-
-      - name: 🔐 Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            us-east-2
-
-      - name: 🚀 Deploy Lambdas & API
-        id: deploy
-        env:
-          AWS_REGION:               us-east-2
-          AWS_ACCOUNT_ID:           ${{ secrets.AWS_ACCOUNT_ID }}
-          EMAIL_SOURCE:             AutomationSolutionsCenter@cvdexinfo.com
-          DYNAMODB_TABLE_NAME:      ProjectPlace_DataExtrator_landing_table_v3
-          PROJECTPLACE_SECRET_NAME: ProjectPlaceAPICredentials
-          S3_BUCKET_NAME:           projectplace-dv-2025-x9a7b
+      - name: Create deployment ZIP
         run: |
-          python3 scripts/deploy_approval_workflow.py
+          zip -j $ZIP_FILE lambdas/project_metadata_enricher_by_id.py
 
-      - name: 📤 Emit API ID for injection
-        id: api
-        env:
-          AWS_REGION:               us-east-2
-          AWS_ACCOUNT_ID:           ${{ secrets.AWS_ACCOUNT_ID }}
-          EMAIL_SOURCE:             AutomationSolutionsCenter@cvdexinfo.com
-          DYNAMODB_TABLE_NAME:      ProjectPlace_DataExtrator_landing_table_v3
-          PROJECTPLACE_SECRET_NAME: ProjectPlaceAPICredentials
-          S3_BUCKET_NAME:           projectplace-dv-2025-x9a7b
+      - name: Update Lambda code
         run: |
-          echo "api_id=$(python3 scripts/emit_api_id.py)" >> $GITHUB_OUTPUT
+          aws lambda update-function-code \
+            --function-name $FUNCTION_NAME \
+            --zip-file fileb://$ZIP_FILE
 
-      - name: 🧪 Smoke test sendApprovalEmail
-        env:
-          AWS_REGION:   us-east-2
-          ACTA_API_ID:  ${{ steps.api.outputs.api_id }}
-          EMAIL_SOURCE: AutomationSolutionsCenter@cvdexinfo.com
+      - name: Smoke-invoke with test project_id
         run: |
           aws lambda invoke \
-            --function-name sendApprovalEmail \
-            --payload '{"acta_id":"100000000000000"}' \
+            --function-name $FUNCTION_NAME \
             --cli-binary-format raw-in-base64-out \
-            /tmp/res.json
-          cat /tmp/res.json
+            --payload '{"project_id":"'"${{ secrets.TEST_PROJECT_ID }}"'"}' \
+            out.json
+          cat out.json
+
+      - name: Assert DynamoDB wrote at least one row
+        run: |
+          COUNT=$(aws dynamodb query \
+            --table-name ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }} \
+            --key-condition-expression 'project_id = :p' \
+            --expression-attribute-values '{":p":{"S":"'"${{ secrets.TEST_PROJECT_ID }}"'"}}' \
+            --query 'Count' --output text)
+          echo "Rows written = $COUNT"
+          test "$COUNT" -gt 0

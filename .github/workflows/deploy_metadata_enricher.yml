@@ -5,7 +5,7 @@ on:
   
   push:
     paths:
-      - lambdas/project_metadata_enricher.py
+      - approval/project_metadata_enricher.py
       - .github/workflows/deploy_metadata_enricher.yml
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
         run: aws sts get-caller-identity
 
       - name: Zip Lambda
-        run: zip -j $ZIP_FILE lambdas/project_metadata_enricher.py
+        run: zip -j $ZIP_FILE approval/project_metadata_enricher.py
 
       - name: Update code
         run: |

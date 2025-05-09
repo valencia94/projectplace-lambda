@@ -11,6 +11,8 @@ Key upgrades
 """
 import os, json, time, uuid, boto3
 from urllib import request, parse, error
+from typing import Optional
+
 
 REGION       = os.environ["AWS_REGION"]
 TABLE_NAME   = os.environ["DYNAMODB_ENRICHMENT_TABLE"]
@@ -54,7 +56,7 @@ def get_all_cards(project_id: str, token: str) -> list[dict]:
 
 # ---------- Lambda handler --------------------------------------------------
 
-def lambda_handler(event: dict | None = None, context=None):
+def lambda_handler(event: Optional[dict] = None, context=None):
     event = event or {}
     project_id = event.get("project_id")
 

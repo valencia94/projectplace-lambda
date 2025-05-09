@@ -1,4 +1,4 @@
-name: Deploy → projectMetadataEnricher (all-projects)
+name: Deploy → projectMetadataEnricher (ALL projects)
 
 on:
   push:
@@ -7,78 +7,64 @@ on:
       - .github/workflows/deploy_metadata_enricher.yml
 
 jobs:
-  deploy-and-test:
+  deploy-test:
     runs-on: ubuntu-latest
-
-    permissions:
-      id-token: write       # OIDC for AWS
-      contents: read
-
     env:
-      FUNCTION_NAME: projectMetadataEnricher
-      ZIP_FILE: project_metadata_enricher.zip
-      REGION: us-east-2
-      TABLE_NAME: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-      TEST_PID:  ${{ secrets.TEST_PROJECT_ID }}
+      REGION:           ${{ secrets.AWS_REGION || 'us-east-2' }}
+      FUNCTION_NAME:    projectMetadataEnricher
+      ZIP_FILE:         project_metadata_enricher.zip
+      TABLE_NAME:       ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+      TEST_PID:         ${{ secrets.TEST_PROJECT_ID }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configure AWS creds
+      - name: AWS creds
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_GHA_ROLE_ARN }}
-          aws-region:      ${{ env.REGION }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.REGION }}
 
-      - name: Create deployment ZIP
-        run: |
-          zip -j $ZIP_FILE lambdas/project_metadata_enricher.py
+      - name: who-am-I
+        run: aws sts get-caller-identity
 
-      - name: Update Lambda code
+      - name: Zip Lambda
+        run: zip -j $ZIP_FILE lambdas/project_metadata_enricher.py
+
+      - name: Update code
         run: |
           aws lambda update-function-code \
             --function-name $FUNCTION_NAME \
             --zip-file fileb://$ZIP_FILE
 
-      - name: Count rows BEFORE invoke
-        id: precheck
+      - name: Count BEFORE
+        id: pre
         run: |
-          BEFORE=$(aws dynamodb query \
+          before=$(aws dynamodb query \
             --table-name $TABLE_NAME \
             --key-condition-expression 'project_id = :p' \
             --expression-attribute-values '{":p":{"S":"'"$TEST_PID"'"}}' \
             --query 'Count' --output text)
-          echo "before=$BEFORE" >> "$GITHUB_OUTPUT"
+          echo "before=$before" >> "$GITHUB_OUTPUT"
 
-      - name: Invoke full enrichment (DRY_RUN=false)
-        run: |
-          aws lambda invoke \
-            --function-name $FUNCTION_NAME \
-            --cli-binary-format raw-in-base64-out \
-            --payload '{}' out.json
-          cat out.json
+      - name: Invoke enrichment
+        run: aws lambda invoke --function-name $FUNCTION_NAME --payload '{}' out.json --cli-binary-format raw-in-base64-out
 
-      - name: Count rows AFTER invoke
-        id: postcheck
+      - name: Count AFTER
+        id: post
         run: |
-          AFTER=$(aws dynamodb query \
+          after=$(aws dynamodb query \
             --table-name $TABLE_NAME \
             --key-condition-expression 'project_id = :p' \
             --expression-attribute-values '{":p":{"S":"'"$TEST_PID"'"}}' \
             --query 'Count' --output text)
-          echo "after=$AFTER" >> "$GITHUB_OUTPUT"
+          echo "after=$after" >> "$GITHUB_OUTPUT"
 
-      - name: Assert at least one row exists and Δ > 0 on an empty table
+      - name: Assert table not empty
         run: |
-          BEFORE=${{ steps.precheck.outputs.before }}
-          AFTER=${{ steps.postcheck.outputs.after }}
-          echo "Rows before: $BEFORE  •  after: $AFTER"
-          if [ "$AFTER" -eq 0 ]; then
-            echo "::error ::No rows for test project_id"
-            exit 1
-          fi
-          if [ "$BEFORE" -eq "$AFTER" ] && [ "$BEFORE" -eq 0 ]; then
-            echo "::error ::No new rows and table was empty"
-            exit 1
-          fi
+          before=${{ steps.pre.outputs.before }}
+          after=${{ steps.post.outputs.after }}
+          echo "Rows before: $before • after: $after"
+          if [ "$after" -eq 0 ]; then
+            echo "::error ::No rows for test PID"; exit 1; fi

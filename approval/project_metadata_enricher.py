@@ -45,6 +45,27 @@ def _cards(pid, token):
     with request.urlopen(request.Request(url,
             headers={"Authorization":f"Bearer {token}"})) as r:
         return json.loads(r.read())
+              
+# ───── add helper just after _cards() ───────────────────────────────
+def _comments(card_id: str, token: str) -> list[dict]:
+    url = f"{API_BASE}/1/cards/{card_id}/comments"
+    with request.urlopen(request.Request(url,
+            headers={"Authorization":f"Bearer {token}"})) as r:
+        return json.loads(r.read())
+
+# … inside the for-card loop … replace current "comments" logic
+for card in _cards(pid, token):
+    cid   = str(card["id"])
+    c_cnt = card.get("comment_count", 0) or 0
+    comments = _comments(cid, token) if c_cnt else []
+
+    # client_email: first text-chunk that *looks* like an e-mail address
+    client_email = ""
+    for c in comments:
+        text = (c.get("text") or "").strip()
+        if "@" in text and "." in text:
+            client_email = text
+            break
 
 # ───────────────────────── handler ────────────────────────
 def lambda_handler(event=None, context=None):

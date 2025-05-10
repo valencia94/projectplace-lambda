@@ -12,7 +12,8 @@ from boto3.dynamodb.conditions import Key, Attr
 from botocore.exceptions import ClientError
 
 REGION      = os.getenv("AWS_REGION", boto3.Session().region_name)
-TABLE_NAME  = os.environ["DYNAMODB_TABLE_NAME"]
+TABLE_NAME = (os.getenv("DYNAMODB_ENRICHMENT_TABLE")    # ← preferred (v2)
+              or os.getenv("DYNAMODB_TABLE_NAME"))      # ← fallback (v3
 
 ddb   = boto3.resource("dynamodb", region_name=REGION)
 table = ddb.Table(TABLE_NAME)

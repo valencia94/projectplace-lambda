@@ -42,13 +42,19 @@ jobs:
       - name: Invoke Lambda
         run: |
           set -euo pipefail
+          echo '{}' > payload.json
           aws lambda invoke \
             --function-name "$FUNCTION_NAME" \
             --cli-binary-format raw-in-base64-out \
             --payload file://payload.json out.json
           cat out.json
-          grep -q '"ValidationException"' out.json && \
-            (echo "::error ::Schema mismatch"; exit 1 || true)
+          grep -q '"statusCode": 200' out.json
+
+          # fail only if ValidationException **is** present
+          if grep -q '"ValidationException"' out.json; then
+            echo "::error ::Schema mismatch detected"
+            exit 1
+          fi
 
       - name: Verify rows exist for TEST_PID
         run: |

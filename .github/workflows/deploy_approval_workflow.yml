@@ -85,14 +85,20 @@ jobs:
         TABLE="${TABLE_NAME}"
         GSI="approval_token-index"
 
+        # Check if the index already exists
         if aws dynamodb describe-table --table-name "$TABLE" \
              --query "Table.GlobalSecondaryIndexes[?IndexName=='$GSI']" \
              --output text | grep -q "$GSI"; then
           echo "✅ GSI already present"; exit 0
         fi
 
+        # Detect billing mode (missing field = PAY_PER_REQUEST)
         BILLING=$(aws dynamodb describe-table --table-name "$TABLE" \
-                   --query 'Table.BillingModeSummary.BillingMode' --output text 2>/dev/null)
+                   --query 'Table.BillingModeSummary.BillingMode' \
+                   --output text 2>/dev/null || true)
+
+        echo "⚙️  Creating GSI $GSI on $TABLE (billing=${BILLING:-PAY_PER_REQUEST})…"
+
         if [ "$BILLING" = "PROVISIONED" ]; then
           UPDATE='[{"Create":{
             "IndexName":"'"$GSI"'",
@@ -100,32 +106,16 @@ jobs:
               {"AttributeName":"approval_token","KeyType":"HASH"},
               {"AttributeName":"project_id","KeyType":"RANGE"}],
             "Projection":{"ProjectionType":"ALL"},
-            "ProvisionedThroughput":{"ReadCapacityUnits":1,"WriteCapacityUnits":1}}}]'
+            "ProvisionedThroughput":{"ReadCapacityUnits":1,"WriteCapacityUnits":1}
+          }}]'
         else
           UPDATE='[{"Create":{
             "IndexName":"'"$GSI"'",
             "KeySchema":[
               {"AttributeName":"approval_token","KeyType":"HASH"},
               {"AttributeName":"project_id","KeyType":"RANGE"}],
-            "Projection":{"ProjectionType":"ALL"}}}]'
-fi
-        echo "⚙️  Creating GSI $GSI on $TABLE (billing=$BILLING)…"
-
-        if [ "$BILLING" = "PAY_PER_REQUEST" ]; then
-          UPDATE='[{"Create":{
-            "IndexName":"'"$GSI"'",
-            "KeySchema":[
-              {"AttributeName":"approval_token","KeyType":"HASH"},
-              {"AttributeName":"project_id","KeyType":"RANGE"}],
-            "Projection":{"ProjectionType":"ALL"}}}]'
-        else
-          UPDATE='[{"Create":{
-            "IndexName":"'"$GSI"'",
-            "KeySchema":[
-              {"AttributeName":"approval_token","KeyType":"HASH"},
-              {"AttributeName":"project_id","KeyType":"RANGE"}],
-            "Projection":{"ProjectionType":"ALL"},
-            "ProvisionedThroughput":{"ReadCapacityUnits":1,"WriteCapacityUnits":1}}}]'
+            "Projection":{"ProjectionType":"ALL"}
+          }}]'
         fi
 
         aws dynamodb update-table --table-name "$TABLE" \

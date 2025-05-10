@@ -54,16 +54,18 @@ jobs:
       - name: Invoke Lambda
         run: |
           set -euo pipefail
+          echo "{\"project_id\":\"${TEST_PID}\"}" > payload.json
           aws lambda invoke \
             --function-name "$FUNCTION_NAME" \
             --cli-binary-format raw-in-base64-out \
-            --payload file://payload.json \
-            out.json
+            --payload file://payload.json out.json
           cat out.json
+          # fail if the payload ever goes up empty
           if grep -q "Missing project_id" out.json; then
             echo "::error ::Lambda reported missing project_id"
             exit 1
           fi
+          grep -q '"statusCode": 200' out.json
 
       - name: Verify Dynamo rows
         run: |

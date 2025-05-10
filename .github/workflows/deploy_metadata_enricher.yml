@@ -1,8 +1,7 @@
 name: Deploy → projectMetadataEnricher (ALL projects)
 
 on:
-  workflow_dispatch:  # ✅ This enables the 'Run workflow' button
-  
+  workflow_dispatch:
   push:
     paths:
       - approval/project_metadata_enricher.py
@@ -12,11 +11,11 @@ jobs:
   deploy-test:
     runs-on: ubuntu-latest
     env:
-      REGION:           ${{ secrets.AWS_REGION || 'us-east-2' }}
-      FUNCTION_NAME:    projectMetadataEnricher
-      ZIP_FILE:         project_metadata_enricher.zip
-      TABLE_NAME:       ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-      TEST_PID:         ${{ secrets.TEST_PROJECT_ID }}
+      REGION:        ${{ secrets.AWS_REGION || 'us-east-2' }}
+      FUNCTION_NAME: projectMetadataEnricher
+      ZIP_FILE:      project_metadata_enricher.zip
+      TABLE_NAME:    ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+      TEST_PID:      ${{ secrets.TEST_PROJECT_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -28,45 +27,34 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.REGION }}
 
-      - name: who-am-I
-        run: aws sts get-caller-identity
+      - run: aws sts get-caller-identity
 
-      - name: Zip Lambda
-        run: zip -j $ZIP_FILE approval/project_metadata_enricher.py
+      - run: zip -j $ZIP_FILE approval/project_metadata_enricher.py
 
-      - name: Update code
-        run: |
+      - run: |
           aws lambda update-function-code \
             --function-name $FUNCTION_NAME \
             --zip-file fileb://$ZIP_FILE
 
-      - name: Count BEFORE
-        id: pre
+      # ----- build empty payload file -----
+      - run: echo '{}' > payload.json
+
+      - name: Invoke (DRY_RUN off)
         run: |
-          before=$(aws dynamodb query \
-            --table-name $TABLE_NAME \
+          set -euo pipefail
+          aws lambda invoke \
+            --function-name "$FUNCTION_NAME" \
+            --cli-binary-format raw-in-base64-out \
+            --payload file://payload.json out.json
+          cat out.json
+          grep -q '"statusCode": 200' out.json
+
+      - name: Verify rows exist for TEST_PID
+        run: |
+          rows=$(aws dynamodb query \
+            --table-name "$TABLE_NAME" \
             --key-condition-expression 'project_id = :p' \
-            --expression-attribute-values '{":p":{"S":"'"$TEST_PID"'"}}' \
+            --expression-attribute-values '{":p":{"S":"'"${TEST_PID}"'"}}' \
             --query 'Count' --output text)
-          echo "before=$before" >> "$GITHUB_OUTPUT"
-
-      - name: Invoke enrichment
-        run: aws lambda invoke --function-name $FUNCTION_NAME --payload '{}' out.json --cli-binary-format raw-in-base64-out
-
-      - name: Count AFTER
-        id: post
-        run: |
-          after=$(aws dynamodb query \
-            --table-name $TABLE_NAME \
-            --key-condition-expression 'project_id = :p' \
-            --expression-attribute-values '{":p":{"S":"'"$TEST_PID"'"}}' \
-            --query 'Count' --output text)
-          echo "after=$after" >> "$GITHUB_OUTPUT"
-
-      - name: Assert table not empty
-        run: |
-          before=${{ steps.pre.outputs.before }}
-          after=${{ steps.post.outputs.after }}
-          echo "Rows before: $before • after: $after"
-          if [ "$after" -eq 0 ]; then
-            echo "::error ::No rows for test PID"; exit 1; fi
+          echo "Rows for ${TEST_PID}: ${rows}"
+          test "$rows" -gt 0

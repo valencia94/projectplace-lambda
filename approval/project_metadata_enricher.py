@@ -70,14 +70,15 @@ def lambda_handler(event=None, context=None):
     start = time.time()
     token = _token()
 
-    # Collect EVERY project_id in the table with pagination
-    paginator = boto3.client("dynamodb").get_paginator("scan")
-    project_ids = {
-        item["project_id"]
-        for page in paginator.paginate(
-            TableName=TABLE_NAME, ProjectionExpression="project_id")
-        for item in page["Items"]
-    }
+# -- collect every project_id (resource paginator -> plain strings) --
+project_ids = set()
+scan_kwargs = {"ProjectionExpression": "project_id"}
+resp = ddb_tbl.scan(**scan_kwargs)
+project_ids.update(item["project_id"] for item in resp["Items"])
+
+while "LastEvaluatedKey" in resp:
+    resp = ddb_tbl.scan(ExclusiveStartKey=resp["LastEvaluatedKey"], **scan_kwargs)
+    project_ids.update(item["project_id"] for item in resp["Items"])
 
     row_count = 0
     for pid in project_ids:

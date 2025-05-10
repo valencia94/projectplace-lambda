@@ -1,67 +1,137 @@
-name: Deploy → projectMetadataEnricher (ALL projects)
+#!/usr/bin/env python3
+"""
+ProjectPlace → DynamoDB enrichment Lambda   v2.3-lite (2025-05-10)
 
-on:
-  workflow_dispatch:
-  push:
-    paths:
-      - approval/project_metadata_enricher.py
-      - .github/workflows/deploy_metadata_enricher.yml
+• No external libraries – safe for the stock Python 3.9 runtime
+• Retries ProjectPlace 5× with exponential back-off (0.8 → 12 s)
+• Same comment/email logic and UpdateItem behaviour as v2.3
+"""
 
-jobs:
-  deploy-test:
-    runs-on: ubuntu-latest
-    env:
-      REGION:        ${{ secrets.AWS_REGION || 'us-east-2' }}
-      FUNCTION_NAME: projectMetadataEnricher
-      ZIP_FILE:      project_metadata_enricher.zip
-      TABLE_NAME:    ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-      TEST_PID:      ${{ secrets.TEST_PROJECT_ID }}
+import os, json, time, re, random, boto3, urllib.error
+from urllib import request, parse
 
-    steps:
-      - uses: actions/checkout@v4
+# ─── ENV / CLIENTS ──────────────────────────────────────────────────
+REGION      = os.getenv("AWS_REGION", boto3.Session().region_name)
+TABLE_NAME  = os.environ["DYNAMODB_ENRICHMENT_TABLE"].strip()
+SECRET_NAME = os.getenv("PROJECTPLACE_SECRET_NAME",
+                         "ProjectPlaceAPICredentials")
+API_BASE    = "https://api.projectplace.com"
+DRY_RUN     = os.getenv("DRY_RUN", "0") == "1"
 
-      - name: AWS creds
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.REGION }}
+ddb = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
+sm  = boto3.client("secretsmanager", region_name=REGION)
 
-      - run: aws sts get-caller-identity
+EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 
-      - run: zip -j $ZIP_FILE approval/project_metadata_enricher.py
+# ─── helpers ────────────────────────────────────────────────────────
+def _http(url: str, token: str | None = None) -> list | dict:
+    """GET with up-to-5 retries on HTTP 5xx / 429."""
+    delay = 0.8
+    for attempt in range(5):
+        try:
+            req = request.Request(url, headers=({"Authorization": f"Bearer {token}"} if token else {}))
+            with request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code < 500 and e.code != 429:
+                raise
+            time.sleep(delay + random.random() * 0.3)
+            delay *= 1.8
+    raise e  # after 5 tries
 
-      - run: |
-          aws lambda update-function-code \
-            --function-name $FUNCTION_NAME \
-            --zip-file fileb://$ZIP_FILE
+def _token() -> str:
+    creds = json.loads(sm.get_secret_value(SecretId=SECRET_NAME)["SecretString"])
+    data  = parse.urlencode({
+        "grant_type": "client_credentials",
+        "client_id":  creds["PROJECTPLACE_ROBOT_CLIENT_ID"],
+        "client_secret": creds["PROJECTPLACE_ROBOT_CLIENT_SECRET"],
+    }).encode()
+    req = request.Request(f"{API_BASE}/oauth2/access_token", data=data,
+                          headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with request.urlopen(req) as r:
+        return json.loads(r.read())["access_token"]
 
-      # invoke with empty payload
-      - run: echo '{}' > payload.json
+def _cards(pid: str, tok: str):
+    return _http(f"{API_BASE}/1/projects/{pid}/cards", tok)
 
-      - name: Invoke Lambda
-        run: |
-          set -euo pipefail
-          echo '{}' > payload.json
-          aws lambda invoke \
-            --function-name "$FUNCTION_NAME" \
-            --cli-binary-format raw-in-base64-out \
-            --payload file://payload.json out.json
-          cat out.json
-          grep -q '"statusCode": 200' out.json
+def _comments(cid: str, tok: str):
+    return _http(f"{API_BASE}/1/cards/{cid}/comments", tok)
 
-          # fail only if ValidationException **is** present
-          if grep -q '"ValidationException"' out.json; then
-            echo "::error ::Schema mismatch detected"
-            exit 1
-          fi
+def _pm_email(pid: str, tok: str, creator_id: str):
+    for m in _http(f"{API_BASE}/1/projects/{pid}/members", tok):
+        if str(m.get("id")) == str(creator_id):
+            return m.get("email", ""), m.get("name", "")
+    return "", ""
 
-      - name: Verify rows exist for TEST_PID
-        run: |
-          rows=$(aws dynamodb query \
-            --table-name "$TABLE_NAME" \
-            --key-condition-expression 'project_id = :p' \
-            --expression-attribute-values '{":p":{"S":"'"${TEST_PID}"'"}}' \
-            --query 'Count' --output text)
-          echo "Rows for ${TEST_PID}: ${rows}"
-          test "$rows" -gt 0
+# ─── Lambda handler ────────────────────────────────────────────────
+def lambda_handler(event=None, context=None):
+    start = time.time()
+    token = _token()
+
+    try:
+        projects = {i["project_id"] for i in ddb.scan()["Items"]}
+    except Exception as e:
+        print("❌ Dynamo scan failed:", e)
+        return {"statusCode": 500, "body": "Dynamo scan failure"}
+
+    rows = 0
+    for pid in projects:
+        for card in _cards(pid, token):
+            cid        = str(card["id"])
+            title      = card.get("title", "")
+            creator_id = card.get("creator", {}).get("id")
+
+            comments = (_comments(cid, token)
+                        if card.get("comment_count", 0) else [])
+
+            # client_email extraction
+            if title == "Client_Email" and comments:
+                client_email = comments[0].get("text", "")
+            else:
+                client_email = next((EMAIL_RE.search(c.get("text", "")).group(0)
+                                     for c in comments
+                                     if EMAIL_RE.search(c.get("text", ""))), "")
+
+            pm_email, pm_name = _pm_email(pid, token, creator_id)
+
+            attr = {
+                ":title": title,
+                ":description": card.get("description"),
+                ":client_email": client_email,
+                ":pm_email": pm_email,
+                ":pm_name": pm_name,
+                ":board_id": str(card.get("board_id")),
+                ":board_name": card.get("board_name"),
+                ":column_id": card.get("column_id"),
+                ":is_done": card.get("is_done"),
+                ":is_blocked": card.get("is_blocked"),
+                ":blocked_reason": card.get("is_blocked_reason"),
+                ":checklist": card.get("checklist", []),
+                ":comments": comments,
+                ":progress": card.get("progress"),
+                ":direct_url": card.get("direct_url"),
+                ":now": int(time.time()),
+            }
+
+            if not DRY_RUN:
+                ddb.update_item(
+                    Key={"project_id": str(pid), "card_id": cid},
+                    UpdateExpression="""
+                        SET title=:title, description=:description,
+                            client_email=:client_email, pm_email=:pm_email,
+                            pm_name=:pm_name, board_id=:board_id,
+                            board_name=:board_name, column_id=:column_id,
+                            is_done=:is_done, is_blocked=:is_blocked,
+                            is_blocked_reason=:blocked_reason,
+                            checklist=:checklist, comments=:comments,
+                            progress=:progress, direct_url=:direct_url,
+                            last_refreshed=:now
+                    """,
+                    ExpressionAttributeValues=attr)
+
+            rows += 1
+            time.sleep(0.05)
+
+    print(f"✅ Enriched {rows} cards in {int(time.time() - start)} s")
+    return {"statusCode": 200,
+            "body": f"Enriched {rows} cards in {int(time.time() - start)} s"}

@@ -47,7 +47,8 @@ jobs:
             --cli-binary-format raw-in-base64-out \
             --payload file://payload.json out.json
           cat out.json
-          grep -q '"statusCode": 200' out.json
+          grep -q '"ValidationException"' out.json && \
+            (echo "::error ::Schema mismatch"; exit 1 || true)
 
       - name: Verify rows exist for TEST_PID
         run: |

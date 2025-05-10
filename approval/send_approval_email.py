@@ -1,147 +1,116 @@
 #!/usr/bin/env python3
 """
-sendApprovalEmail.py
----------------------------------
-Sends branded Acta-approval emails with Approve / Reject links,
-attaches the Acta PDF from S3, and writes the approval_token
-+ status back into *your* (project_id,card_id) item.
+send_approval_email.py
+─────────────────────────────────────────────────────────────
+• Generates an approval_token (UUID-4)  
+• Persists token + “pending” status to DynamoDB  
+• Sends a branded email (HTML) via SES with Approve / Reject links  
+• Attaches the Acta PDF stored in S3
 
-ENV VARS REQUIRED
------------------
-AWS_REGION             e.g. us-east-2
-ACTA_API_ID            e.g. 4r0pt34gx4    (REST API id, injected after API deploy)
-API_STAGE              e.g. prod         (optional, defaults to “prod”)
-EMAIL_SOURCE           AutomationSolutionsCenter@cvdexinfo.com
-DYNAMODB_TABLE_NAME    ProjectPlace_DataExtrator_landing_table_v3
-S3_BUCKET_NAME         projectplace-dv-2025-x9a7b
-"""
+ENV VARS (must exist in Lambda or GitHub secrets → workflow)
+─────────────────────────────────────────────────────────────
+AWS_REGION              us-east-2 (falls back to boto3 default)
+ACTA_API_ID             4r0pt34gx4
+API_STAGE               prod   (optional, default = prod)
+EMAIL_SOURCE            AutomationSolutionsCenter@cvdexinfo.com
+DYNAMODB_TABLE_NAME     ProjectPlace_DataExtractor_landing_table_v3
+S3_BUCKET_NAME          projectplace-dv-2025-x9a7b
 
-import os, uuid, json
+import os, uuid, json, base64, urllib.parse, mimetypes
 import boto3
 from email.message import EmailMessage
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
-# ─── ENV ────────────────────────────────────────────────────────────────
-REGION         = os.environ["AWS_REGION"]
-API_ID         = os.environ.get("ACTA_API_ID")      # not fatal if missing
-API_STAGE      = os.environ.get("API_STAGE", "prod")
-EMAIL_SOURCE   = os.environ["EMAIL_SOURCE"]
-TABLE_NAME     = os.environ["DYNAMODB_TABLE_NAME"]
-S3_BUCKET_NAME = os.environ["S3_BUCKET_NAME"]
+# ─── ENV ────────────────────────────────────────────────────────────
+REGION        = os.getenv("AWS_REGION", boto3.Session().region_name)
+API_ID        = os.getenv("ACTA_API_ID", "")
+API_STAGE     = os.getenv("API_STAGE", "prod")
+EMAIL_SOURCE  = os.environ["EMAIL_SOURCE"]
+TABLE_NAME    = os.environ["DYNAMODB_TABLE_NAME"]
+BUCKET_NAME   = os.environ["S3_BUCKET_NAME"]
 
-# ─── CLIENTS ──────────────────────────────────────────────────────────
-ddb = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
-ses = boto3.client("ses", region_name=REGION)
-s3  = boto3.client("s3",  region_name=REGION)
+# ─── CLIENTS ────────────────────────────────────────────────────────
+ses   = boto3.client("ses", region_name=REGION)
+s3    = boto3.client("s3", region_name=REGION)
+dynamodb = boto3.resource("dynamodb", region_name=REGION)
+table = dynamodb.Table(TABLE_NAME)
 
+# ─── CONST ──────────────────────────────────────────────────────────
+API_BASE = f"https://{API_ID}.execute-api.{REGION}.amazonaws.com/{API_STAGE}/approve"
+BRAND_COLOR = "#4AC795"          # Ikusi green
 
-def lambda_handler(event, _ctx):
-    # ─── parse input ────────────────────────────────────────────────
-    # we expect { "acta_id": "<PROJECT_ID>" }
-    acta_id = event.get("acta_id")
-    if not acta_id:
-        return {"statusCode":400, "body":"Missing acta_id"}
-
-    # ─── fetch all metadata rows for that project ───────────────────
-    resp = ddb.query(
-        KeyConditionExpression=Key("project_id").eq(acta_id)
-    )
-    items = resp.get("Items", [])
-    if not items:
-        return {"statusCode":404, "body":"Acta not found"}
-
-    # ─── pull the client email row ─────────────────────────────────
-    email_item = next(
-      (i for i in items if i.get("title")=="Client_Email" and i.get("comments")),
-      None
-    )
-    if not email_item:
-        return {"statusCode":404, "body":"Client email missing"}
-    recipient = email_item["comments"][0]
-
-    # ─── pull the PDF S3 key ────────────────────────────────────────
-    pdf_item = next((i for i in items if i.get("s3_pdf_path")), None)
-    if not pdf_item:
-        return {"statusCode":404, "body":"PDF missing in S3"}
-    pdf_key = pdf_item["s3_pdf_path"]
-    card_id  = pdf_item["card_id"]
-
-    # read the PDF bytes
-    pdf_stream = s3.get_object(Bucket=S3_BUCKET_NAME, Key=pdf_key)["Body"].read()
-
-    # ─── generate & persist a new token ─────────────────────────────
-    token = str(uuid.uuid4())
-    ddb.update_item(
-      Key={"project_id":acta_id, "card_id":card_id},
-      UpdateExpression=(
-        "SET approval_token = :t, approval_status = :p, sent_timestamp = :ts"
-      ),
-      ExpressionAttributeValues={
-        ":t": token,
-        ":p": "pending",
-        ":ts": int(__import__("time").time())
-      }
-    )
-
-    # ─── build your Approve / Reject URLs ───────────────────────────
-    if API_ID:
-        base = f"https://{API_ID}.execute-api.{REGION}.amazonaws.com/{API_STAGE}/approve?token={token}"
-        approve = base + "&status=approved"
-        reject  = base + "&status=rejected"
-    else:
-        # if someone forgot to inject ACTA_API_ID, at least let you test locally
-        approve = reject = "#missing-api-id"
-
-    # ─── craft the HTML body ────────────────────────────────────────
-    html = f"""
-    <html><body style="font-family:Verdana,Arial">
-      <h3>Acta Approval Request – {acta_id}</h3>
-      <p>Please review the attached Acta and click:</p>
-      <p>
-        <a href="{approve}" style="
-            padding:10px 18px;
-            background:#4AC795;
-            color:#fff;
-            text-decoration:none;
-            border-radius:4px">✔ Approve</a>
+def build_html(recipient_name: str, approve_url: str, reject_url: str) -> str:
+    """Returns a simple, brand-coloured HTML template."""
+    return f"""
+    <html>
+      <body style="font-family:Verdana; line-height:1.5">
+        <h2 style="color:{BRAND_COLOR}; margin-bottom:0">Project Acta for your review</h2>
+        <p>Hi {recipient_name or 'there'},</p>
+        <p>
+          Please review the attached Acta and click one of the buttons below
+          to let us know your decision.<br>
+          <small>(If no response is received within 5 days, the Acta will be auto-approved.)</small>
+        </p>
+        <a href="{approve_url}" style="background:{BRAND_COLOR};color:white;
+           padding:10px 18px; text-decoration:none; border-radius:4px;">Approve</a>
         &nbsp;
-        <a href="{reject}" style="
-            padding:10px 18px;
-            background:#E74C3C;
-            color:#fff;
-            text-decoration:none;
-            border-radius:4px">✖ Reject</a>
-      </p>
-      <p style="font-size:12px;color:#888">
-        Automated via CVDex Acta Automation Platform.
-      </p>
-    </body></html>
+        <a href="{reject_url}" style="background:#d9534f;color:white;
+           padding:10px 18px; text-decoration:none; border-radius:4px;">Reject</a>
+        <p style="margin-top:32px;font-size:12px;color:#888">
+          CVDex Tech Solutions – delivering excellence through automation
+        </p>
+      </body>
+    </html>
     """
 
-    # ─── assemble raw email + attachment ────────────────────────────
+def lambda_handler(event, context):  # noqa: C901 – keep single handler for Lambda
+    # Expected: { "project_id": "...", "card_id": "...", "recipient": "foo@bar.com", "pdf_key": "..." }
+    try:
+        payload = json.loads(event["body"]) if isinstance(event.get("body"), str) else event
+        project_id  = payload["project_id"]
+        card_id     = payload["card_id"]
+        recipient   = payload["recipient"]
+        pdf_key     = payload["pdf_key"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return {"statusCode": 400, "body": "Missing or malformed request body"}
+
+    # ── 1. Generate & persist token ─────────────────────────────────
+    approval_token = str(uuid.uuid4())
+    table.update_item(
+        Key={"project_id": project_id, "card_id": card_id},
+        UpdateExpression="SET approval_token=:t, approval_status=:s",
+        ExpressionAttributeValues={":t": approval_token, ":s": "pending"}
+    )
+
+    # ── 2. Build signed URLs ───────────────────────────────────────
+    safe_token = urllib.parse.quote_plus(approval_token)
+    approve_url = f"{API_BASE}?token={safe_token}&status=approved"
+    reject_url  = f"{API_BASE}?token={safe_token}&status=rejected"
+
+    # ── 3. Fetch PDF from S3 and create e-mail ─────────────────────
+    obj = s3.get_object(Bucket=BUCKET_NAME, Key=pdf_key)
+    pdf_bytes = obj["Body"].read()
+
     msg = EmailMessage()
-    msg["Subject"] = f"Acta Approval • {acta_id}"
+    msg["Subject"] = "Action required – Project Acta ready for approval"
     msg["From"]    = EMAIL_SOURCE
     msg["To"]      = recipient
-    msg.set_content("This email requires HTML support.")
-    msg.add_alternative(html, subtype="html")
-    msg.add_attachment(
-      pdf_stream,
-      maintype="application",
-      subtype="pdf",
-      filename="Acta.pdf"
-    )
+    msg.set_content("HTML e-mail required. If you see this, please view in an HTML-capable client.")
+    msg.add_alternative(build_html(None, approve_url, reject_url), subtype="html")
 
-    # ─── send via SES ───────────────────────────────────────────────
-    res = ses.send_raw_email(
-      Source=EMAIL_SOURCE,
-      Destinations=[recipient],
-      RawMessage={"Data": msg.as_bytes()}
-    )
-    if res["ResponseMetadata"]["HTTPStatusCode"] != 200:
-        return {"statusCode":500, "body":"SES send failed"}
+    maintype, subtype = mimetypes.guess_type(pdf_key)[0].split("/")
+    msg.add_attachment(pdf_bytes, maintype=maintype, subtype=subtype,
+                       filename=os.path.basename(pdf_key))
 
-    return {
-      "statusCode":200,
-      "body": json.dumps({"MessageId":res["MessageId"]})
-    }
+    # ── 4. Send via SES ────────────────────────────────────────────
+    try:
+        res = ses.send_raw_email(
+            Source=EMAIL_SOURCE,
+            Destinations=[recipient],
+            RawMessage={"Data": msg.as_bytes()}
+        )
+    except ClientError as e:
+        return {"statusCode": 500, "body": f"SES send failed: {e.response['Error']['Message']}"}
+
+    return {"statusCode": 200, "body": json.dumps({"MessageId": res["MessageId"]})}

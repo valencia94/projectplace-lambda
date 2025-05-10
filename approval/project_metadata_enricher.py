@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-ProjectPlace → DynamoDB all-projects enricher (v1.1 – 2025-05-09)
+ProjectPlace → DynamoDB ALL-projects enricher  –  Upsert-safe (v2.0, 2025-05-10)
 
-Upgrades
---------
-✓ Logs table name & write-count
-✓ Idempotent writes (ConditionExpression)
-✓ Optional DRY_RUN mode for QA (env var DRY_RUN=1)
-✓ Same 9-minute self-cutoff; prints total items written
+✓ Refreshes every card for every project already stored in Dynamo.
+✓ Uses UpdateItem so approval fields (`status`, `sent_timestamp`, etc.) remain untouched.
+✓ `DRY_RUN=1` env var still skips writes (for QA).
+✓ 9-minute self-cut-off to avoid Lambda timeout.
 """
+
 import os, json, time, uuid, boto3
 from urllib import request, parse, error
 
@@ -21,8 +20,7 @@ DRY_RUN      = os.environ.get("DRY_RUN", "0") == "1"
 ddb     = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
 secrets = boto3.client("secretsmanager", region_name=REGION)
 
-# ---------- helpers ---------------------------------------------------------
-
+# ── helpers ────────────────────────────────────────────────────────────────
 def get_projectplace_token() -> str:
     creds = json.loads(secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"])
     data  = parse.urlencode({
@@ -44,7 +42,7 @@ def get_pm_email(project_id: str, token: str, creator_id: str) -> tuple[str, str
                 if str(m.get("id")) == str(creator_id):
                     return m.get("email", ""), m.get("name", "")
     except error.HTTPError as e:
-        print("⚠️ Member fetch failed:", e.read().decode())
+        print("⚠️ member fetch failed:", e.read().decode())
     return "", ""
 
 def get_all_cards(project_id: str, token: str) -> list[dict]:
@@ -53,11 +51,10 @@ def get_all_cards(project_id: str, token: str) -> list[dict]:
     with request.urlopen(req) as resp:
         return json.loads(resp.read())
 
-# ---------- Lambda handler --------------------------------------------------
-
+# ── Lambda handler ────────────────────────────────────────────────────────
 def lambda_handler(event=None, context=None):
     start = time.time()
-    print(f"🚀 Full enrichment run → table {TABLE_NAME} (dry_run={DRY_RUN})")
+    print(f"🚀 Full enrichment run → {TABLE_NAME} (dry_run={DRY_RUN})")
 
     try:
         token = get_projectplace_token()
@@ -76,64 +73,78 @@ def lambda_handler(event=None, context=None):
 
     writes = 0
     for project_id in project_ids:
-        if time.time() - start > 540:  # 9-minute safety cutoff
+        if time.time() - start > 540:           # 9-minute safety cutoff
             print("⏰ Timeout limit reached – exiting loop")
             break
 
         print(f"🔄 Project {project_id}")
         try:
             for card in get_all_cards(project_id, token):
-                cid        = card.get("id")
+                cid        = str(card.get("id"))
                 title      = card.get("title", "")
                 comments   = card.get("comments", [])
-                creator_id = card.get("creator", {}).get("id")
+                creator_id = str(card.get("creator", {}).get("id"))
 
                 client_email = (
                     comments[0]
-                    if title == "Client_Email" and isinstance(comments, list) and comments
-                    else ""
+                    if title == "Client_Email" and comments else ""
                 )
                 pm_email, pm_name = get_pm_email(project_id, token, creator_id)
 
-                item = {
-                    "project_id":      str(project_id),
-                    "card_id":         str(cid),
-                    "title":           title,
-                    "description":     card.get("description"),
-                    "creator_id":      str(creator_id),
-                    "created_time":    card.get("created_time"),
-                    "client_email":    client_email,
-                    "pm_email":        pm_email,
-                    "pm_name":         pm_name,
-                    "board_id":        card.get("board_id"),
-                    "board_name":      card.get("board_name"),
-                    "column_id":       card.get("column_id"),
-                    "is_done":         card.get("is_done"),
-                    "is_blocked":      card.get("is_blocked"),
-                    "is_blocked_reason": card.get("is_blocked_reason"),
-                    "checklist":       card.get("checklist", []),
-                    "comments":        comments,
-                    "progress":        card.get("progress"),
-                    "direct_url":      card.get("direct_url"),
-                    "approval_token":  str(uuid.uuid4()),
-                    "sent_timestamp":  int(time.time()),
-                    "status":          "pending",
+                attr = {
+                    ":title":        title,
+                    ":description":  card.get("description"),
+                    ":client_email": client_email,
+                    ":pm_email":     pm_email,
+                    ":pm_name":      pm_name,
+                    ":board_id":     str(card.get("board_id")),
+                    ":board_name":   card.get("board_name"),
+                    ":column_id":    card.get("column_id"),
+                    ":is_done":      card.get("is_done"),
+                    ":is_blocked":   card.get("is_blocked"),
+                    ":blocked_reason": card.get("is_blocked_reason"),
+                    ":checklist":    card.get("checklist", []),
+                    ":comments":     comments,
+                    ":progress":     card.get("progress"),
+                    ":direct_url":   card.get("direct_url"),
+                    ":now":          int(time.time()),
                 }
 
                 if DRY_RUN:
                     print(f"(dry) Would upsert card {cid}")
-                else:
-                    ddb.put_item(
-                        Item=item,
-                        ConditionExpression="attribute_not_exists(card_id)"
-                    )
-                    writes += 1
-                    print(f"✅ Upserted card {cid}")
-                time.sleep(0.05)
+                    continue
+
+                resp = ddb.update_item(
+                    Key={"project_id": str(project_id), "card_id": cid},
+                    UpdateExpression="""
+                        SET title = :title,
+                            description = :description,
+                            client_email = :client_email,
+                            pm_email = :pm_email,
+                            pm_name  = :pm_name,
+                            board_id = :board_id,
+                            board_name = :board_name,
+                            column_id = :column_id,
+                            is_done   = :is_done,
+                            is_blocked = :is_blocked,
+                            is_blocked_reason = :blocked_reason,
+                            checklist = :checklist,
+                            comments  = :comments,
+                            progress  = :progress,
+                            direct_url = :direct_url,
+                            last_refreshed = :now
+                    """,
+                    ExpressionAttributeValues=attr,
+                    ReturnValues="UPDATED_NEW"
+                )
+                op = "INSERT" if not resp.get("Attributes") else "UPDATE"
+                writes += 1
+                print(f"✅ {op} {cid}")
+                time.sleep(0.05)  # API-friendly pause
 
         except Exception as e:
             print(f"❌ Failure for project {project_id}:", e)
 
     elapsed = int(time.time() - start)
-    print(f"✅ Enrichment run complete – wrote {writes} items in {elapsed}s")
+    print(f"✅ Enrichment run complete – {writes} card-rows processed in {elapsed}s")
     return {"statusCode": 200, "body": f"Enriched {writes} cards in {elapsed}s"}

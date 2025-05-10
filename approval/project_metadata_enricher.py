@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-ProjectPlace → DynamoDB enrichment Lambda   v2.3-lite (2025-05-10)
+ProjectPlace → DynamoDB enrichment Lambda   v2.3-lite-py39 (2025-05-10)
 
-• No external libraries – safe for the stock Python 3.9 runtime
-• Retries ProjectPlace 5× with exponential back-off (0.8 → 12 s)
-• Same comment/email logic and UpdateItem behaviour as v2.3
+• No external libraries
+• Exponential back-off (0.8 → 12 s) on ProjectPlace 5xx / 429
+• Fetches comments only when count > 0
+• Extracts client_email from “Client_Email” card or first e-mail-looking comment
+• Upserts rows so approval fields remain intact
 """
 
 import os, json, time, re, random, boto3, urllib.error
 from urllib import request, parse
+from typing import Any, Dict, List, Tuple
 
 # ─── ENV / CLIENTS ──────────────────────────────────────────────────
 REGION      = os.getenv("AWS_REGION", boto3.Session().region_name)
@@ -23,22 +26,27 @@ sm  = boto3.client("secretsmanager", region_name=REGION)
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 
-# ─── helpers ────────────────────────────────────────────────────────
-def _http(url: str, token: str | None = None) -> list | dict:
-    """GET with up-to-5 retries on HTTP 5xx / 429."""
+# ─── small retry helper (no external libs) ──────────────────────────
+def _http(url: str, token: str = None) -> Any:
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     delay = 0.8
-    for attempt in range(5):
+    last_err = None
+    for _ in range(5):
         try:
-            req = request.Request(url, headers=({"Authorization": f"Bearer {token}"} if token else {}))
+            req = request.Request(url, headers=headers)
             with request.urlopen(req, timeout=10) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
             if e.code < 500 and e.code != 429:
                 raise
-            time.sleep(delay + random.random() * 0.3)
-            delay *= 1.8
-    raise e  # after 5 tries
+            last_err = e
+        except urllib.error.URLError as e:
+            last_err = e
+        time.sleep(delay + random.random() * 0.3)
+        delay *= 1.8
+    raise last_err
 
+# ─── API helpers ────────────────────────────────────────────────────
 def _token() -> str:
     creds = json.loads(sm.get_secret_value(SecretId=SECRET_NAME)["SecretString"])
     data  = parse.urlencode({
@@ -48,16 +56,15 @@ def _token() -> str:
     }).encode()
     req = request.Request(f"{API_BASE}/oauth2/access_token", data=data,
                           headers={"Content-Type": "application/x-www-form-urlencoded"})
-    with request.urlopen(req) as r:
-        return json.loads(r.read())["access_token"]
+    return json.loads(request.urlopen(req).read())["access_token"]
 
-def _cards(pid: str, tok: str):
+def _cards(pid: str, tok: str) -> List[Dict]:
     return _http(f"{API_BASE}/1/projects/{pid}/cards", tok)
 
-def _comments(cid: str, tok: str):
+def _comments(cid: str, tok: str) -> List[Dict]:
     return _http(f"{API_BASE}/1/cards/{cid}/comments", tok)
 
-def _pm_email(pid: str, tok: str, creator_id: str):
+def _pm_email(pid: str, tok: str, creator_id: str) -> Tuple[str, str]:
     for m in _http(f"{API_BASE}/1/projects/{pid}/members", tok):
         if str(m.get("id")) == str(creator_id):
             return m.get("email", ""), m.get("name", "")
@@ -81,16 +88,15 @@ def lambda_handler(event=None, context=None):
             title      = card.get("title", "")
             creator_id = card.get("creator", {}).get("id")
 
-            comments = (_comments(cid, token)
-                        if card.get("comment_count", 0) else [])
+            comments = _comments(cid, token) if card.get("comment_count", 0) else []
 
-            # client_email extraction
             if title == "Client_Email" and comments:
                 client_email = comments[0].get("text", "")
             else:
-                client_email = next((EMAIL_RE.search(c.get("text", "")).group(0)
-                                     for c in comments
-                                     if EMAIL_RE.search(c.get("text", ""))), "")
+                client_email = next(
+                    (EMAIL_RE.search(c.get("text", "")).group(0)
+                     for c in comments if EMAIL_RE.search(c.get("text", ""))),
+                    "")
 
             pm_email, pm_name = _pm_email(pid, token, creator_id)
 

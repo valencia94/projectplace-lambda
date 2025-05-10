@@ -27,7 +27,8 @@ REGION        = os.getenv("AWS_REGION", boto3.Session().region_name)
 API_ID        = os.getenv("ACTA_API_ID", "")
 API_STAGE     = os.getenv("API_STAGE", "prod")
 EMAIL_SOURCE  = os.environ["EMAIL_SOURCE"]
-TABLE_NAME    = os.environ["DYNAMODB_TABLE_NAME"]
+TABLE_NAME = (os.getenv("DYNAMODB_ENRICHMENT_TABLE")    # ← preferred (v2)
+              or os.getenv("DYNAMODB_TABLE_NAME"))      # ← fallback (v3
 BUCKET_NAME   = os.environ["S3_BUCKET_NAME"]
 
 # ─── CLIENTS ────────────────────────────────────────────────────────

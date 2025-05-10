@@ -81,10 +81,10 @@ def lambda_handler(event=None, context=None):
     # full scan for project IDs
     paginator = table.meta.client.get_paginator("scan")
     project_ids = {
-        i["project_id"]["S"]
+        item["project_id"]
         for page in paginator.paginate(
             TableName=TABLE_NAME, ProjectionExpression="project_id")
-        for i in page["Items"]
+        for item in page["Items"]
     }
 
     rows = 0

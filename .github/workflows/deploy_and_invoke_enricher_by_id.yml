@@ -1,7 +1,7 @@
 name: Deploy → projectMetadataEnricherById
 
 on:
-  workflow_dispatch:       # Manual “Run workflow” button
+  workflow_dispatch:
   push:
     paths:
       - approval/project_metadata_enricher_by_id.py
@@ -20,53 +20,57 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: AWS creds (static keys)
+      - name: AWS creds
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.REGION }}
 
-      - name: Quick who-am-I
-        run: aws sts get-caller-identity
+      - run: aws sts get-caller-identity
 
-      - name: Zip Lambda
-        run: zip -j $ZIP_FILE approval/project_metadata_enricher_by_id.py
+      - run: zip -j $ZIP_FILE approval/project_metadata_enricher_by_id.py
 
-      - name: Update code
-        run: |
+      - run: |
           aws lambda update-function-code \
             --function-name $FUNCTION_NAME \
             --zip-file fileb://$ZIP_FILE
 
-      # ────────────────────────────────────────────────
-      # Sanity guard: fail fast if TEST_PID is empty
-      - name: Sanity-check TEST_PROJECT_ID
+      # ---------- verify the secret actually expanded ----------
+      - name: Debug TEST_PID
+        run: echo "TEST_PID is [$TEST_PID]"
+
+      - name: Fail early if secret missing or blank
         run: |
           if [ -z "$TEST_PID" ]; then
             echo "::error ::TEST_PROJECT_ID secret missing or empty"
             exit 1
           fi
-      # ────────────────────────────────────────────────
 
-      - name: Invoke by-project enricher
+      # ---------- build payload file so quoting is bullet-proof ----------
+      - name: Create payload.json
+        run: echo "{\"project_id\":\"${TEST_PID}\"}" > payload.json
+
+      - name: Invoke Lambda
         run: |
           set -euo pipefail
           aws lambda invoke \
             --function-name "$FUNCTION_NAME" \
             --cli-binary-format raw-in-base64-out \
-            --payload "{\"project_id\":\"${TEST_PID}\"}" \
+            --payload file://payload.json \
             out.json
           cat out.json
+          if grep -q "Missing project_id" out.json; then
+            echo "::error ::Lambda reported missing project_id"
+            exit 1
+          fi
 
-      - name: Ensure ≥ 1 row now exists
+      - name: Verify Dynamo rows
         run: |
-          set -euo pipefail
           rows=$(aws dynamodb query \
             --table-name "$TABLE_NAME" \
             --key-condition-expression 'project_id = :p' \
-            --expression-attribute-values "{\"\": {\"S\": \"dummy\"}}" \
             --expression-attribute-values '{":p":{"S":"'"${TEST_PID}"'"}}' \
             --query 'Count' --output text)
-          echo "Rows for ${TEST_PID} → ${rows}"
+          echo "Rows for ${TEST_PID}: ${rows}"
           test "$rows" -gt 0

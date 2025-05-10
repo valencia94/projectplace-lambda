@@ -1,111 +1,99 @@
 #!/usr/bin/env python3
 """
-ProjectPlace → DynamoDB enrichment Lambda   v2.6 (2025-05-10)
+ProjectPlace → DynamoDB enrichment Lambda   v2.7  (2025-05-10)
 
-• Writes extended card fields + comments to DynamoDB v2
-• No external dependencies (stock Python 3.9)
-• Retries ProjectPlace calls (HTTP 5xx / 429) with back-off
+* Stores full card payload + comments
+* Converts all numeric leaves to Decimal for DynamoDB
+* No external libs
 """
 
-import json
-import os
-import random
-import re
-import time
-import urllib.error
+import json, os, re, time, random, boto3, urllib.error
+from decimal import Decimal
+from urllib import request, parse
 from typing import Any, Dict, List, Optional
 
-import boto3
-from urllib import parse, request
-
-REGION = os.getenv("AWS_REGION", boto3.Session().region_name)
-TABLE_NAME = os.environ["DYNAMODB_ENRICHMENT_TABLE"].strip()
-API_BASE = "https://api.projectplace.com"
+REGION      = os.getenv("AWS_REGION", boto3.Session().region_name)
+TABLE_NAME  = os.environ["DYNAMODB_ENRICHMENT_TABLE"].strip()
+API_BASE    = "https://api.projectplace.com"
 SECRET_NAME = os.getenv("PROJECTPLACE_SECRET_NAME",
-                        "ProjectPlaceAPICredentials")
-DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
+                         "ProjectPlaceAPICredentials")
+DRY_RUN     = os.getenv("DRY_RUN", "0") == "1"
 
-ddb = boto3.resource("dynamodb", region_name=REGION)
-table = ddb.Table(TABLE_NAME)
-secrets = boto3.client("secretsmanager", region_name=REGION)
+dynamodb = boto3.resource("dynamodb", region_name=REGION)
+table    = dynamodb.Table(TABLE_NAME)
+secrets  = boto3.client("secretsmanager", region_name=REGION)
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 
-
-# ───────────────────────── helpers ─────────────────────────
+# ─── helpers ───────────────────────────────────────────────────────
 def _http(url: str, token: Optional[str] = None) -> Any:
-    """GET with up-to-5 retries on 5xx / 429."""
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    hdr = {"Authorization": f"Bearer {token}"} if token else {}
     delay = 0.8
-    last_exc: Exception | None = None
+    last  = None
     for _ in range(5):
         try:
-            req = request.Request(url, headers=headers)
-            with request.urlopen(req, timeout=8) as resp:
-                return json.loads(resp.read())
-        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-            if isinstance(exc, urllib.error.HTTPError) and exc.code < 500 and exc.code != 429:
+            with request.urlopen(request.Request(url, headers=hdr), timeout=10) as r:
+                return json.loads(r.read())
+        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+            if isinstance(e, urllib.error.HTTPError) and e.code < 500 and e.code != 429:
                 raise
-            last_exc = exc
-            time.sleep(delay + random.random() * 0.2)
-            delay *= 1.7
-    raise last_exc or RuntimeError("HTTP retries exhausted")
+            last = e
+            time.sleep(delay + random.random()*0.3)
+            delay *= 1.8
+    raise last
 
-
-def _get_token() -> str:
-    sec = json.loads(secrets.get_secret_value(SecretId=SECRET_NAME)
-                     ["SecretString"])
+def _token() -> str:
+    cred = json.loads(secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"])
     data = parse.urlencode({
         "grant_type": "client_credentials",
-        "client_id": sec["PROJECTPLACE_ROBOT_CLIENT_ID"],
-        "client_secret": sec["PROJECTPLACE_ROBOT_CLIENT_SECRET"],
+        "client_id":  cred["PROJECTPLACE_ROBOT_CLIENT_ID"],
+        "client_secret": cred["PROJECTPLACE_ROBOT_CLIENT_SECRET"],
     }).encode()
-    req = request.Request(f"{API_BASE}/oauth2/access_token", data=data,
-                          headers={"Content-Type": "application/x-www-form-urlencoded"})
-    return json.loads(request.urlopen(req).read())["access_token"]
+    with request.urlopen(request.Request(f"{API_BASE}/oauth2/access_token", data=data,
+         headers={"Content-Type": "application/x-www-form-urlencoded"})) as r:
+        return json.loads(r.read())["access_token"]
 
-
-_cards = lambda pid, tok: _http(f"{API_BASE}/1/projects/{pid}/cards", tok)
+_cards    = lambda pid, tok: _http(f"{API_BASE}/1/projects/{pid}/cards", tok)
 _comments = lambda cid, tok: _http(f"{API_BASE}/1/cards/{cid}/comments", tok)
-_members = lambda pid, tok: _http(f"{API_BASE}/1/projects/{pid}/members", tok)
+_members  = lambda pid, tok: _http(f"{API_BASE}/1/projects/{pid}/members", tok)
 
-
-def _pm_email(pid: str, tok: str, creator_id: str) -> tuple[str, str]:
+def _pm_email(pid: str, tok: str, creator: Any) -> tuple[str, str]:
     for m in _members(pid, tok):
-        if str(m.get("id")) == str(creator_id):
+        if str(m.get("id")) == str(creator):
             return m.get("email", ""), m.get("name", "")
     return "", ""
 
+def _ddb_safe(val: Any) -> Any:
+    """Recursively convert float → Decimal, None → None (Dynamo NULL)."""
+    if isinstance(val, float):
+        return Decimal(str(val))
+    if isinstance(val, list):
+        return [_ddb_safe(v) for v in val]
+    if isinstance(val, dict):
+        return {k: _ddb_safe(v) for k, v in val.items()}
+    return val  # int, str, bool, None
 
-def _all_project_ids() -> set[str]:
-    """Scan Dynamo table fully and return distinct project_ids (as strings)."""
-    proj_ids: set[str] = set()
-    scan_kwargs = {"ProjectionExpression": "project_id"}
-    resp = table.scan(**scan_kwargs)
-    proj_ids.update(item["project_id"] for item in resp["Items"])
-    while "LastEvaluatedKey" in resp:
-        resp = table.scan(ExclusiveStartKey=resp["LastEvaluatedKey"],
-                          **scan_kwargs)
-        proj_ids.update(item["project_id"] for item in resp["Items"])
-    return proj_ids
-
-
-# ───────────────────────── Lambda handler ─────────────────────────
+# ─── Lambda handler ───────────────────────────────────────────────
 def lambda_handler(event=None, context=None):
     start = time.time()
-    token = _get_token()
-    projects = _all_project_ids()
+    tok   = _token()
 
-    row_count = 0
-    for pid in projects:
-        for card in _cards(pid, token):
-            cid = str(card["id"])
+    # full scan for project IDs
+    paginator = table.meta.client.get_paginator("scan")
+    project_ids = {
+        i["project_id"]["S"]
+        for page in paginator.paginate(
+            TableName=TABLE_NAME, ProjectionExpression="project_id")
+        for i in page["Items"]
+    }
+
+    rows = 0
+    for pid in project_ids:
+        for card in _cards(pid, tok):
+            cid   = str(card["id"])
             title = card.get("title", "")
+            comments = _comments(cid, tok) if card.get("comment_count") else []
 
-            # fetch comments only if there are any
-            comments = _comments(cid, token) if card.get("comment_count", 0) else []
-
-            # client_email extraction
             if title == "Client_Email" and comments:
                 client_email = comments[0].get("text", "")
             else:
@@ -115,45 +103,43 @@ def lambda_handler(event=None, context=None):
                     ""
                 )
 
-            pm_email, pm_name = _pm_email(pid, token, card.get("creator", {}).get("id"))
+            pm_email, pm_name = _pm_email(pid, tok, card.get("creator", {}).get("id"))
 
             attr: Dict[str, Any] = {
-                # core fields
-                ":title": title,
-                ":description": card.get("description"),
-                ":client_email": client_email,
-                ":pm_email": pm_email,
-                ":pm_name": pm_name,
-                ":now": int(time.time()),
-                # extended fields
-                ":assignee": card.get("assignee"),
-                ":assignee_id": card.get("assignee_id"),
-                ":board_id": str(card.get("board_id")),
-                ":board_name": card.get("board_name"),
-                ":connected_issues": card.get("connected_issues"),
-                ":connected_risks": card.get("connected_risks"),
-                ":contributors": card.get("contributors"),
-                ":created_time": card.get("created_time"),
-                ":creator": card.get("creator"),
-                ":dependencies": card.get("dependencies"),
-                ":planlet": card.get("planlet"),
-                ":planlet_id": card.get("planlet_id"),
-                ":progress": card.get("progress"),
-                ":project": card.get("project"),
-                ":reported_time": card.get("reported_time"),
-                ":comments": comments,
-                ":direct_url": card.get("direct_url"),
-                ":is_done": card.get("is_done"),
-                ":is_blocked": card.get("is_blocked"),
-                ":blocked_reason": card.get("is_blocked_reason"),
-                ":checklist": card.get("checklist", []),
-                ":column_id": card.get("column_id"),
-                ":board_display_order": card.get("display_order"),
+                ":title":          title,
+                ":description":    card.get("description"),
+                ":client_email":   client_email,
+                ":pm_email":       pm_email,
+                ":pm_name":        pm_name,
+                ":assignee":       card.get("assignee"),
+                ":assignee_id":    card.get("assignee_id"),
+                ":board_id":       str(card.get("board_id")),
+                ":board_name":     card.get("board_name"),
+                ":connected_issues": _ddb_safe(card.get("connected_issues")),
+                ":connected_risks":  _ddb_safe(card.get("connected_risks")),
+                ":contributors":     _ddb_safe(card.get("contributors")),
+                ":created_time":    card.get("created_time"),
+                ":creator":         _ddb_safe(card.get("creator")),
+                ":dependencies":    _ddb_safe(card.get("dependencies")),
+                ":planlet":         _ddb_safe(card.get("planlet")),
+                ":planlet_id":      card.get("planlet_id"),
+                ":progress":        _ddb_safe(card.get("progress")),
+                ":project":         _ddb_safe(card.get("project")),
+                ":reported_time":   card.get("reported_time"),
+                ":comments":        _ddb_safe(comments),
+                ":direct_url":      card.get("direct_url"),
+                ":is_done":         card.get("is_done"),
+                ":is_blocked":      card.get("is_blocked"),
+                ":blocked_reason":  card.get("is_blocked_reason"),
+                ":checklist":       _ddb_safe(card.get("checklist", [])),
+                ":column_id":       card.get("column_id"),
+                ":board_display_order": _ddb_safe(card.get("display_order")),
+                ":now":             int(time.time()),
             }
 
             if not DRY_RUN:
                 table.update_item(
-                    Key={"project_id": str(pid), "card_id": cid},
+                    Key={"project_id": pid, "card_id": cid},
                     UpdateExpression="""
                         SET title               = :title,
                             description         = :description,
@@ -188,10 +174,9 @@ def lambda_handler(event=None, context=None):
                     ExpressionAttributeValues=attr,
                 )
 
-            row_count += 1
-            time.sleep(0.05)  # API-friendly pause
+            rows += 1
+            time.sleep(0.05)
 
-    elapsed = int(time.time() - start)
-    msg = f"Enriched {row_count} cards in {elapsed}s"
+    msg = f"Enriched {rows} cards in {int(time.time() - start)} s"
     print(f"✅ {msg}")
     return {"statusCode": 200, "body": msg}

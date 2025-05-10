@@ -1,105 +1,101 @@
 #!/usr/bin/env python3
 """
-ALL-projects enricher – stores full card JSON + key filter columns
-(v3.2, 2025-05-10)
+ProjectPlace → DynamoDB enrichment Lambda   v2.1  (2025-05-10)
 """
 
-import os, json, time, boto3
+import os, json, time, uuid, boto3
 from urllib import request, parse, error
 
-REGION   = os.environ["AWS_REGION"]
-TABLE_V2 = os.environ["DYNAMODB_ENRICHMENT_TABLE"]
-TABLE_V3 = os.environ.get(
-    "RAW_TABLE", "ProjectPlace_DataExtrator_landing_table_v3"
-)
-SECRET = os.environ.get("PROJECTPLACE_SECRET_NAME",
-                        "ProjectPlaceAPICredentials")
-API   = "https://api.projectplace.com"
-DRY   = os.environ.get("DRY_RUN", "0") == "1"
+REGION       = os.getenv("AWS_REGION", boto3.Session().region_name)
+TABLE_NAME   = os.environ["DYNAMODB_ENRICHMENT_TABLE"]      # table v2
+SECRET_NAME  = os.getenv("PROJECTPLACE_SECRET_NAME",
+                          "ProjectPlaceAPICredentials")
+API_BASE     = "https://api.projectplace.com"
+DRY_RUN      = os.getenv("DRY_RUN", "0") == "1"
 
-dy    = boto3.resource("dynamodb", region_name=REGION)
-t2    = dy.Table(TABLE_V2)
-t3    = dy.Table(TABLE_V3)
-sm    = boto3.client("secretsmanager", region_name=REGION)
+ddb     = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
+sm      = boto3.client("secretsmanager", region_name=REGION)
 
-# ── helpers ──────────────────────────────────────────────────────────────
-def token() -> str:
-    c = json.loads(sm.get_secret_value(SecretId=SECRET)["SecretString"])
-    body = parse.urlencode({
-        "grant_type": "client_credentials",
-        "client_id":  c["PROJECTPLACE_ROBOT_CLIENT_ID"],
-        "client_secret": c["PROJECTPLACE_ROBOT_CLIENT_SECRET"],
-    }).encode()
-    req = request.Request(f"{API}/oauth2/access_token", data=body,
-                          headers={"Content-Type":
-                                   "application/x-www-form-urlencoded"})
+# ───────────────────────── helpers ─────────────────────────
+def _token():
+    creds = json.loads(sm.get_secret_value(SecretId=SECRET_NAME)["SecretString"])
+    data = parse.urlencode({"grant_type":"client_credentials",
+                            "client_id":creds["PROJECTPLACE_ROBOT_CLIENT_ID"],
+                            "client_secret":creds["PROJECTPLACE_ROBOT_CLIENT_SECRET"]
+                           }).encode()
+    req  = request.Request(f"{API_BASE}/oauth2/access_token", data=data,
+                           headers={"Content-Type":"application/x-www-form-urlencoded"})
     with request.urlopen(req) as r:
         return json.loads(r.read())["access_token"]
 
-def cards(pid: str, tok: str) -> list[dict]:
-    req = request.Request(f"{API}/1/projects/{pid}/cards",
-                          headers={"Authorization": f"Bearer {tok}"})
-    with request.urlopen(req) as r:
+def _pm_email(pid, token, creator):
+    url = f"{API_BASE}/1/projects/{pid}/members"
+    try:
+        with request.urlopen(request.Request(url,
+                   headers={"Authorization":f"Bearer {token}"})) as r:
+            for m in json.loads(r.read()):
+                if str(m.get("id")) == str(creator):
+                    return m.get("email",""), m.get("name","")
+    except error.HTTPError as e:
+        print("⚠️ member fetch failed:", e.read().decode())
+    return "", ""
+
+def _cards(pid, token):
+    url = f"{API_BASE}/1/projects/{pid}/cards"
+    with request.urlopen(request.Request(url,
+            headers={"Authorization":f"Bearer {token}"})) as r:
         return json.loads(r.read())
 
-# ── handler ──────────────────────────────────────────────────────────────
+# ───────────────────────── handler ────────────────────────
 def lambda_handler(event=None, context=None):
     start = time.time()
-    print(f"🚀 Refresh → {TABLE_V2} (dry_run={DRY})")
+    token = _token()
+    projects = {i["project_id"] for i in ddb.scan()["Items"]}
 
-    pids = list({row["project_id"] for row in t3.scan()["Items"]})
-    if not pids:
-        return {"statusCode": 404, "body": "No projects in v3"}
+    wrote = 0
+    for pid in projects:
+        for card in _cards(pid, token):
+            cid   = str(card["id"])
+            title = card.get("title","")
+            comments   = card.get("comments",[])
+            creator_id = card.get("creator",{}).get("id")
 
-    try:
-        tok = token()
-    except Exception as e:
-        print("❌ Auth failed:", e)
-        return {"statusCode": 500, "body": "Auth failure"}
+            client_email = comments[0] if title=="Client_Email" and comments else ""
+            pm_email, pm_name = _pm_email(pid, token, creator_id)
 
-    writes = 0
-    for pid in pids:
-        if time.time() - start > 540:  # safety
-            print("⏰ Time limit"); break
-        print("🔄", pid)
+            attr = {":title":title,
+                    ":description": card.get("description"),
+                    ":client_email": client_email,
+                    ":pm_email": pm_email,
+                    ":pm_name": pm_name,
+                    ":board_id": str(card.get("board_id")),
+                    ":board_name": card.get("board_name"),
+                    ":column_id": card.get("column_id"),
+                    ":is_done": card.get("is_done"),
+                    ":is_blocked": card.get("is_blocked"),
+                    ":blocked_reason": card.get("is_blocked_reason"),
+                    ":checklist": card.get("checklist",[]),
+                    ":comments": comments,
+                    ":progress": card.get("progress"),
+                    ":direct_url": card.get("direct_url"),
+                    ":now": int(time.time())}
 
-        try:
-            for c in cards(pid, tok):
-                cid = str(c["id"])          # sort key as STRING
+            if DRY_RUN:
+                continue
 
-                attr = {
-                    ":title":       c.get("title"),
-                    ":board_id":    str(c.get("board_id")),
-                    ":board_name":  c.get("board_name"),
-                    ":column_id":   c.get("column_id"),
-                    ":progress":    str(c.get("progress")),   # ← string
-                    ":is_done":     c.get("is_done"),
-                    ":raw":         json.dumps(c),            # full JSON
-                    ":ts":          int(time.time())
-                }
+            ddb.update_item(
+                Key={"project_id": str(pid), "card_id": cid},
+                UpdateExpression="""SET title=:title, description=:description,
+                    client_email=:client_email, pm_email=:pm_email, pm_name=:pm_name,
+                    board_id=:board_id, board_name=:board_name, column_id=:column_id,
+                    is_done=:is_done, is_blocked=:is_blocked,
+                    is_blocked_reason=:blocked_reason, checklist=:checklist,
+                    comments=:comments, progress=:progress, direct_url=:direct_url,
+                    last_refreshed=:now""",
+                ExpressionAttributeValues=attr)
 
-                if DRY:
-                    continue
+            wrote += 1
+            time.sleep(0.05)
 
-                t2.update_item(
-                    Key={"project_id": str(pid), "card_id": cid},
-                    UpdateExpression="""
-                      SET title = :title,
-                          board_id = :board_id,
-                          board_name = :board_name,
-                          column_id = :column_id,
-                          progress  = :progress,
-                          is_done   = :is_done,
-                          raw_card  = :raw,
-                          last_refreshed = :ts
-                    """,
-                    ExpressionAttributeValues=attr
-                )
-                writes += 1
-        except Exception as e:
-            print(f"❌ {pid}: {e}")
-
-    span = int(time.time() - start)
-    print(f"✅ Completed – {writes} rows in {span}s")
     return {"statusCode": 200,
-            "body": f"Enriched {writes} cards in {span}s"}
+            "body": f"Enriched {wrote} cards in {int(time.time()-start)} s"}

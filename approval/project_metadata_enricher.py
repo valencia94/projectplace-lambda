@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-ProjectPlace → DynamoDB ALL-projects enricher  –  Upsert-safe (v2.0, 2025-05-10)
+ProjectPlace → DynamoDB ALL-projects enricher  –  Upsert-safe (v2.1, 2025-05-10)
 
-✓ Refreshes every card for every project already stored in Dynamo.
-✓ Uses UpdateItem so approval fields (`status`, `sent_timestamp`, etc.) remain untouched.
-✓ `DRY_RUN=1` env var still skips writes (for QA).
-✓ 9-minute self-cut-off to avoid Lambda timeout.
+✓ Refresh every card for every project already in table_v2.
+✓ Uses UpdateItem so approval fields (status, sent_timestamp, etc.) stay untouched.
+✓ Both key elements sent as STRING → matches new table schema.
+✓ DRY_RUN=1 skips writes; 9-minute self-cut-off avoids timeout.
 """
 
 import os, json, time, uuid, boto3
@@ -13,17 +13,21 @@ from urllib import request, parse, error
 
 REGION       = os.environ["AWS_REGION"]
 TABLE_NAME   = os.environ["DYNAMODB_ENRICHMENT_TABLE"]
-SECRET_NAME  = os.environ.get("PROJECTPLACE_SECRET_NAME", "ProjectPlaceAPICredentials")
+SECRET_NAME  = os.environ.get("PROJECTPLACE_SECRET_NAME",
+                              "ProjectPlaceAPICredentials")
 API_BASE_URL = "https://api.projectplace.com"
 DRY_RUN      = os.environ.get("DRY_RUN", "0") == "1"
 
 ddb     = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
 secrets = boto3.client("secretsmanager", region_name=REGION)
 
-# ── helpers ────────────────────────────────────────────────────────────────
+
+# ── helpers ──────────────────────────────────────────────────────────────
 def get_projectplace_token() -> str:
-    creds = json.loads(secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"])
-    data  = parse.urlencode({
+    creds = json.loads(
+        secrets.get_secret_value(SecretId=SECRET_NAME)["SecretString"]
+    )
+    data = parse.urlencode({
         "grant_type":    "client_credentials",
         "client_id":     creds["PROJECTPLACE_ROBOT_CLIENT_ID"],
         "client_secret": creds["PROJECTPLACE_ROBOT_CLIENT_SECRET"],
@@ -32,6 +36,7 @@ def get_projectplace_token() -> str:
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
     with request.urlopen(req) as resp:
         return json.loads(resp.read())["access_token"]
+
 
 def get_pm_email(project_id: str, token: str, creator_id: str) -> tuple[str, str]:
     url = f"{API_BASE_URL}/1/projects/{project_id}/members"
@@ -45,13 +50,15 @@ def get_pm_email(project_id: str, token: str, creator_id: str) -> tuple[str, str
         print("⚠️ member fetch failed:", e.read().decode())
     return "", ""
 
+
 def get_all_cards(project_id: str, token: str) -> list[dict]:
     url = f"{API_BASE_URL}/1/projects/{project_id}/cards"
     req = request.Request(url, headers={"Authorization": f"Bearer {token}"})
     with request.urlopen(req) as resp:
         return json.loads(resp.read())
 
-# ── Lambda handler ────────────────────────────────────────────────────────
+
+# ── Lambda handler ───────────────────────────────────────────────────────
 def lambda_handler(event=None, context=None):
     start = time.time()
     print(f"🚀 Full enrichment run → {TABLE_NAME} (dry_run={DRY_RUN})")
@@ -62,6 +69,7 @@ def lambda_handler(event=None, context=None):
         print("❌ Auth failed:", e)
         return {"statusCode": 500, "body": "Auth failure"}
 
+    # Project list = any project that has at least one row in table_v2
     try:
         project_ids = list({i["project_id"] for i in ddb.scan()["Items"]})
     except Exception as e:
@@ -73,14 +81,14 @@ def lambda_handler(event=None, context=None):
 
     writes = 0
     for project_id in project_ids:
-        if time.time() - start > 540:           # 9-minute safety cutoff
+        if time.time() - start > 540:          # 9-minute safety cutoff
             print("⏰ Timeout limit reached – exiting loop")
             break
 
         print(f"🔄 Project {project_id}")
         try:
             for card in get_all_cards(project_id, token):
-                cid        = str(card.get("id"))
+                cid        = str(card.get("id"))        # ← key as STRING
                 title      = card.get("title", "")
                 comments   = card.get("comments", [])
                 creator_id = str(card.get("creator", {}).get("id"))
@@ -115,7 +123,10 @@ def lambda_handler(event=None, context=None):
                     continue
 
                 resp = ddb.update_item(
-                    Key={"project_id": str(project_id), "card_id": cid},
+                    Key={
+                        "project_id": str(project_id),
+                        "card_id":    cid          # STRING sort-key
+                    },
                     UpdateExpression="""
                         SET title = :title,
                             description = :description,
@@ -147,4 +158,5 @@ def lambda_handler(event=None, context=None):
 
     elapsed = int(time.time() - start)
     print(f"✅ Enrichment run complete – {writes} card-rows processed in {elapsed}s")
-    return {"statusCode": 200, "body": f"Enriched {writes} cards in {elapsed}s"}
+    return {"statusCode": 200,
+            "body": f"Enriched {writes} cards in {elapsed}s"}

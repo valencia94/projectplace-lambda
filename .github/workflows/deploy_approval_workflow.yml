@@ -79,7 +79,8 @@ jobs:
     # ──────────────────────────────  GSI CHECK  ───────────────────────────────
     - name: 🛡️  Ensure approval_token-index GSI
       run: |
-        TABLE="${TABLE_NAME}"
+        # 🔹 strip CR/LF that might sneak into secrets
+        TABLE="$(echo "$TABLE_NAME" | tr -d '\n' | tr -d '\r')"
         GSI="approval_token-index"
         if aws dynamodb describe-table --table-name "$TABLE" \
              --query "Table.GlobalSecondaryIndexes[?IndexName=='$GSI']" \

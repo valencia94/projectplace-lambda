@@ -92,9 +92,23 @@ jobs:
         fi
 
         BILLING=$(aws dynamodb describe-table --table-name "$TABLE" \
-                   --query 'BillingModeSummary.BillingMode' --output text \
-                   || echo "PROVISIONED")
-
+                   --query 'Table.BillingModeSummary.BillingMode' --output text 2>/dev/null)
+        if [ "$BILLING" = "PROVISIONED" ]; then
+          UPDATE='[{"Create":{
+            "IndexName":"'"$GSI"'",
+            "KeySchema":[
+              {"AttributeName":"approval_token","KeyType":"HASH"},
+              {"AttributeName":"project_id","KeyType":"RANGE"}],
+            "Projection":{"ProjectionType":"ALL"},
+            "ProvisionedThroughput":{"ReadCapacityUnits":1,"WriteCapacityUnits":1}}}]'
+        else
+          UPDATE='[{"Create":{
+            "IndexName":"'"$GSI"'",
+            "KeySchema":[
+              {"AttributeName":"approval_token","KeyType":"HASH"},
+              {"AttributeName":"project_id","KeyType":"RANGE"}],
+            "Projection":{"ProjectionType":"ALL"}}}]'
+fi
         echo "⚙️  Creating GSI $GSI on $TABLE (billing=$BILLING)…"
 
         if [ "$BILLING" = "PAY_PER_REQUEST" ]; then

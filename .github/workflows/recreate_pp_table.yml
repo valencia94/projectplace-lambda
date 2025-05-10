@@ -1,16 +1,18 @@
 name: ONE-SHOT ▸ Rebuild ProjectPlace table_v2
 
 on:
-  workflow_dispatch:      # manual “Run workflow” button only
+  workflow_dispatch:        # manual Run-workflow button only
 
 jobs:
   rebuild:
     runs-on: ubuntu-latest
+
     env:
       TABLE_NAME: ProjectPlace_DataExtrator_landing_table_v2
       REGION:      ${{ secrets.AWS_REGION || 'us-east-2' }}
       EXPORT_S3:   s3://pp-table-backups/${{ github.run_id }}/
-      BYID_WF:     deploy_and_invoke_enricher_by_id.yml    # existing workflow file
+      TEST_PID:    ${{ secrets.TEST_PROJECT_ID }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -21,16 +23,21 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.REGION }}
 
-      # 1️⃣ optional export (skip if bucket policy blocks it)
+      # 1️⃣ optional export (succeeds or continues)
       - name: Export current table to S3 (best-effort)
         continue-on-error: true
         run: |
-          aws dynamodb export-table-to-point-in-time \
-            --table-arn $(aws dynamodb describe-table --table-name "$TABLE_NAME" --query 'Table.TableArn' --output text) \
-            --s3-bucket $EXPORT_S3 --export-format DYNAMODB_JSON \
-            --region "$REGION"
+          if aws dynamodb describe-table --table-name "$TABLE_NAME" >/dev/null 2>&1; then
+            ARN=$(aws dynamodb describe-table --table-name "$TABLE_NAME" \
+                  --query 'Table.TableArn' --output text)
+            aws dynamodb export-table-to-point-in-time \
+              --table-arn "$ARN" \
+              --s3-bucket "$EXPORT_S3" \
+              --export-format DYNAMODB_JSON \
+              --region "$REGION" || true
+          fi
 
-      # 2️⃣ delete if exists
+      # 2️⃣ delete table if present
       - name: Delete table (if present)
         run: |
           if aws dynamodb describe-table --table-name "$TABLE_NAME" >/dev/null 2>&1; then
@@ -41,8 +48,8 @@ jobs:
             echo "Table already absent."
           fi
 
-      # 3️⃣ re-create with project_id (S) + card_id (S)
-      - name: Create table with correct schema
+      # 3️⃣ recreate with correct key schema
+      - name: Create table with project_id (S) + card_id (S)
         run: |
           aws dynamodb create-table \
             --table-name "$TABLE_NAME" \
@@ -57,12 +64,16 @@ jobs:
           aws dynamodb wait table-exists --table-name "$TABLE_NAME"
           echo "✅ Table recreated and ACTIVE."
 
-      # 4️⃣ trigger by-ID workflow so data refills immediately
-      - name: Dispatch by-ID enrichment workflow
+      # 4️⃣ seed table immediately by invoking the by-ID Lambda
+      - name: Seed table with by-ID Lambda
         run: |
-          gh workflow run "$BYID_WF"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "{\"project_id\":\"${TEST_PID}\"}" > payload.json
+          aws lambda invoke \
+            --function-name projectMetadataEnricherById \
+            --cli-binary-format raw-in-base64-out \
+            --payload file://payload.json out.json
+          cat out.json
+          grep -q '"statusCode": 200' out.json
 
       - name: Reminder
         run: |

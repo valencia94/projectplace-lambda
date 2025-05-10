@@ -4,43 +4,92 @@ on:
   workflow_dispatch:  # ✅ This enables the 'Run workflow' button
   
   push:
+    branches: [ main ]
     paths:
+      - approval/send_approval_email.py
       - approval/handle_approval_callback.py
-      - .github/workflows/deploy_approval_workflow.yml
+      - approval/email_utils.py
+      - config/email_map.json
+      - .github/workflows/deploy_approval.yml
+
+concurrency:
+  group: deploy-acta
+  cancel-in-progress: true
 
 jobs:
-  deploy-test:
+  deploy:
     runs-on: ubuntu-latest
     env:
-      REGION:        ${{ secrets.AWS_REGION || 'us-east-2' }}
-      FUNCTION_NAME: handleApprovalCallback
-      ZIP_FILE:      handle_approval_callback.zip
-
+      AWS_REGION:    ${{ secrets.AWS_REGION }}
+      TABLE_NAME:    ${{ secrets.DYNAMODB_TABLE_NAME }}
+      FUNC_EMAIL:    send_approval_email        # Lambda names in AWS
+      FUNC_CB:       handle_approval_callback
     steps:
-      - uses: actions/checkout@v4
 
-      - name: AWS creds
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.REGION }}
+    - name: 📥  Checkout repo
+      uses: actions/checkout@v4
 
-      - run: aws sts get-caller-identity
+    - name: 🔑  AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region:            ${{ env.AWS_REGION }}
 
-      - run: zip -j $ZIP_FILE approval/handle_approval_callback.py
+    # ─────────────────────────────  EMAIL LAMBDA  ─────────────────────────────
+    - name: 📦  Zip send_approval_email + deps
+      run: |
+        zip -j send_approval_email.zip \
+          approval/send_approval_email.py \
+          approval/email_utils.py \
+          config/email_map.json
 
-      - name: Update code
-        run: |
-          aws lambda update-function-code \
-            --function-name $FUNCTION_NAME \
-            --zip-file fileb://$ZIP_FILE
+    - name: 🚀  Deploy send_approval_email
+      run: |
+        aws lambda update-function-code \
+          --function-name "$FUNC_EMAIL" \
+          --zip-file fileb://send_approval_email.zip
+        while true; do
+          STATUS=$(aws lambda get-function --function-name "$FUNC_EMAIL" \
+                     --query 'Configuration.LastUpdateStatus' --output text)
+          [ "$STATUS" = "Successful" ] && break
+          echo "🕒 waiting on $FUNC_EMAIL → $STATUS"; sleep 4
+        done
 
-      # optional ping test (comment out if API Gateway handles callbacks)
-      - name: Unit invoke
-        run: |
-          aws lambda invoke \
-            --function-name $FUNCTION_NAME \
-            --cli-binary-format raw-in-base64-out \
-            --payload '{"token":"healthcheck"}' out.json
-          cat out.json
+    # ───────────────────────────  CALLBACK LAMBDA  ───────────────────────────
+    - name: 📦  Zip handle_approval_callback
+      run: |
+        zip -j handle_approval_callback.zip \
+          approval/handle_approval_callback.py \
+          approval/email_utils.py
+
+    - name: 🚀  Deploy handle_approval_callback
+      run: |
+        aws lambda update-function-code \
+          --function-name "$FUNC_CB" \
+          --zip-file fileb://handle_approval_callback.zip
+        while true; do
+          STATUS=$(aws lambda get-function --function-name "$FUNC_CB" \
+                     --query 'Configuration.LastUpdateStatus' --output text)
+          [ "$STATUS" = "Successful" ] && break
+          echo "🕒 waiting on $FUNC_CB → $STATUS"; sleep 4
+        done
+
+    # ──────────────────────────────  GSI CHECK  ───────────────────────────────
+    - name: 🛡️  Ensure approval_token-index GSI
+      run: |
+        TABLE="${TABLE_NAME}"
+        GSI="approval_token-index"
+        if aws dynamodb describe-table --table-name "$TABLE" \
+             --query "Table.GlobalSecondaryIndexes[?IndexName=='$GSI']" \
+             --output text | grep -q "$GSI"; then
+          echo "✅ GSI already present"
+        else
+          echo "⚙️  Creating GSI $GSI…"
+          aws dynamodb update-table --table-name "$TABLE" \
+            --attribute-definitions \
+              AttributeName=approval_token,AttributeType=S \
+              AttributeName=project_id,AttributeType=S \
+            --global-secondary-index-updates \
+              "[{\"Create\":{\"IndexName\":\"$GSI\",\"KeySchema\":[{\"AttributeName\":\"approval_token\",\"KeyType\":\"HASH\"},{\"AttributeName\":\"project_id\",\"KeyType\":\"RANGE\"}],\"Projection\":{\"ProjectionType\":\"ALL\"},\"ProvisionedThroughput\":{\"ReadCapacityUnits\":1,\"WriteCapacityUnits\":1}}}]"
+        fi

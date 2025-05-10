@@ -22,8 +22,9 @@ jobs:
     env:
       AWS_REGION:    ${{ secrets.AWS_REGION }}
       TABLE_NAME:    ${{ secrets.DYNAMODB_TABLE_NAME }}
-      FUNC_EMAIL:    sendapprovalemail        # Lambda names in AWS
-      FUNC_CB:       handleapprovalcallback
+      FUNC_EMAIL:  sendApprovalEmail
+      FUNC_CB:     handleApprovalCallback
+  
     steps:
 
     - name: 📥  Checkout repo

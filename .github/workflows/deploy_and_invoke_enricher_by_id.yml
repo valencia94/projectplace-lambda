@@ -1,8 +1,7 @@
 name: Deploy → projectMetadataEnricherById
 
 on:
-  workflow_dispatch:  # ✅ This enables the 'Run workflow' button
-  
+  workflow_dispatch:       # Manual “Run workflow” button
   push:
     paths:
       - approval/project_metadata_enricher_by_id.py
@@ -12,11 +11,11 @@ jobs:
   deploy-test:
     runs-on: ubuntu-latest
     env:
-      REGION:           ${{ secrets.AWS_REGION || 'us-east-2' }}
-      FUNCTION_NAME:    projectMetadataEnricherById
-      ZIP_FILE:         project_metadata_enricher_by_id.zip
-      TABLE_NAME:       ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-      TEST_PID:         ${{ secrets.TEST_PROJECT_ID }}
+      REGION:        ${{ secrets.AWS_REGION || 'us-east-2' }}
+      FUNCTION_NAME: projectMetadataEnricherById
+      ZIP_FILE:      project_metadata_enricher_by_id.zip
+      TABLE_NAME:    ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+      TEST_PID:      ${{ secrets.TEST_PROJECT_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -40,21 +39,34 @@ jobs:
             --function-name $FUNCTION_NAME \
             --zip-file fileb://$ZIP_FILE
 
+      # ────────────────────────────────────────────────
+      # Sanity guard: fail fast if TEST_PID is empty
+      - name: Sanity-check TEST_PROJECT_ID
+        run: |
+          if [ -z "$TEST_PID" ]; then
+            echo "::error ::TEST_PROJECT_ID secret missing or empty"
+            exit 1
+          fi
+      # ────────────────────────────────────────────────
+
       - name: Invoke by-project enricher
         run: |
+          set -euo pipefail
           aws lambda invoke \
-            --function-name $FUNCTION_NAME \
+            --function-name "$FUNCTION_NAME" \
             --cli-binary-format raw-in-base64-out \
-            --payload "{\"project_id\":\"$TEST_PID\"}" \
+            --payload "{\"project_id\":\"${TEST_PID}\"}" \
             out.json
           cat out.json
 
-      - name: Ensure ≥1 row now exists
+      - name: Ensure ≥ 1 row now exists
         run: |
+          set -euo pipefail
           rows=$(aws dynamodb query \
-            --table-name $TABLE_NAME \
+            --table-name "$TABLE_NAME" \
             --key-condition-expression 'project_id = :p' \
-            --expression-attribute-values '{":p":{"S":"'"$TEST_PID"'"}}' \
+            --expression-attribute-values "{\"\": {\"S\": \"dummy\"}}" \
+            --expression-attribute-values '{":p":{"S":"'"${TEST_PID}"'"}}' \
             --query 'Count' --output text)
-          echo "Rows for $TEST_PID → $rows"
+          echo "Rows for ${TEST_PID} → ${rows}"
           test "$rows" -gt 0

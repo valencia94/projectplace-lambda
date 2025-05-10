@@ -1,57 +1,112 @@
-name: Deploy → sendApprovalEmail
+name: Deploy Acta Approval Lambdas
 
 on:
-  workflow_dispatch:  # ✅ This enables the 'Run workflow' button
-  
+  workflow_dispatch:
   push:
+    branches: [ main ]
     paths:
       - approval/send_approval_email.py
+      - approval/handle_approval_callback.py
+      - approval/email_utils.py
+      - config/email_map.json
       - .github/workflows/deploy_approval.yml
 
+concurrency:
+  group: deploy-acta
+  cancel-in-progress: true
+
 jobs:
-  deploy-test:
+  deploy:
     runs-on: ubuntu-latest
     env:
-      REGION:           ${{ secrets.AWS_REGION || 'us-east-2' }}
-      FUNCTION_NAME:    sendApprovalEmail
-      ZIP_FILE:         send_approval_email.zip
-      EMAIL_SOURCE:     ${{ secrets.EMAIL_SOURCE }}
-      TEST_PID:         ${{ secrets.TEST_PROJECT_ID }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      TABLE_NAME: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+      FUNC_EMAIL: sendApprovalEmail
+      FUNC_CB:    handleApprovalCallback
 
     steps:
-      - uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: AWS creds
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.REGION }}
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region:            ${{ env.AWS_REGION }}
 
-      - run: aws sts get-caller-identity
+    # EMAIL LAMBDA ---------------------------------------------------
+    - name: 📦  Zip sendApprovalEmail
+      run: |
+        set -e
+        zip -j send_approval_email.zip \
+          approval/send_approval_email.py approval/email_utils.py \
+          config/email_map.json
 
-      - run: zip -j $ZIP_FILE approval/send_approval_email.py
+    - name: 🚀  Deploy sendApprovalEmail code
+      run: |
+        set -e
+        aws lambda update-function-code \
+          --function-name "$FUNC_EMAIL" \
+          --zip-file fileb://send_approval_email.zip
+        while true; do
+          STATUS=$(aws lambda get-function --function-name "$FUNC_EMAIL" \
+                     --query 'Configuration.LastUpdateStatus' --output text)
+          [[ "$STATUS" == "Successful" ]] && break
+          echo "🕒 waiting → $STATUS"; sleep 4
+        done
+        # ensure handler string matches snake-case file
+        aws lambda update-function-configuration \
+          --function-name "$FUNC_EMAIL" \
+          --handler send_approval_email.lambda_handler
 
-      - name: Update code
-        run: |
-          aws lambda update-function-code \
-            --function-name $FUNCTION_NAME \
-            --zip-file fileb://$ZIP_FILE
+    # CALLBACK LAMBDA -----------------------------------------------
+    - name: 📦  Zip handleApprovalCallback
+      run: |
+        set -e
+        zip -j handle_approval_callback.zip \
+          approval/handle_approval_callback.py approval/email_utils.py
 
-      # ─── guard: fail fast if the secret is missing ───
-      - name: Sanity-check TEST_ACTA_ID
-        run: |
-          if [ -z "${{ secrets.TEST_ACTA_ID }}" ]; then
-            echo "::error ::TEST_ACTA_ID secret missing"
-            exit 1
-          fi
+    - name: 🚀  Deploy handleApprovalCallback code
+      run: |
+        set -e
+        aws lambda update-function-code \
+          --function-name "$FUNC_CB" \
+          --zip-file fileb://handle_approval_callback.zip
+        while true; do
+          STATUS=$(aws lambda get-function --function-name "$FUNC_CB" \
+                     --query 'Configuration.LastUpdateStatus' --output text)
+          [[ "$STATUS" == "Successful" ]] && break
+          echo "🕒 waiting → $STATUS"; sleep 4
+        done
 
-      # ─── dry-run invoke (no email actually sent) ───
-      - name: Dry-run invoke
-        run: |
-          aws lambda invoke \
-            --function-name $FUNCTION_NAME \
-            --cli-binary-format raw-in-base64-out \
-            --payload '{"acta_id":"'"${{ secrets.TEST_ACTA_ID }}"'", "dry_run": true, "email_source": "'"$EMAIL_SOURCE"'" }' \
-            out.json
-          cat out.json
+    # GSI ------------------------------------------------------------
+    - name: 🛡️  Ensure approval_token-index GSI
+      run: |
+        set -e
+        TABLE="${TABLE_NAME}"
+        GSI="approval_token-index"
+        if aws dynamodb describe-table --table-name "$TABLE" \
+             --query "Table.GlobalSecondaryIndexes[?IndexName=='$GSI']" \
+             --output text | grep -q "$GSI"; then
+          echo "✅ GSI present"; exit 0
+        fi
+        BILLING=$(aws dynamodb describe-table --table-name "$TABLE" \
+                   --query 'Table.BillingModeSummary.BillingMode' \
+                   --output text 2>/dev/null || true)
+        if [ "$BILLING" = "PROVISIONED" ]; then
+          UPDATE='[{"Create":{"IndexName":"'$GSI'","KeySchema":[
+            {"AttributeName":"approval_token","KeyType":"HASH"},
+            {"AttributeName":"project_id","KeyType":"RANGE"}],
+            "Projection":{"ProjectionType":"ALL"},
+            "ProvisionedThroughput":{"ReadCapacityUnits":1,"WriteCapacityUnits":1}}}]'
+        else
+          UPDATE='[{"Create":{"IndexName":"'$GSI'","KeySchema":[
+            {"AttributeName":"approval_token","KeyType":"HASH"},
+            {"AttributeName":"project_id","KeyType":"RANGE"}],
+            "Projection":{"ProjectionType":"ALL"}}}]'
+        fi
+        echo "⚙️  Creating GSI $GSI (billing=${BILLING:-PAY_PER_REQUEST})"
+        aws dynamodb update-table --table-name "$TABLE" \
+          --attribute-definitions \
+            AttributeName=approval_token,AttributeType=S \
+            AttributeName=project_id,AttributeType=S \
+          --global-secondary-index-updates "$UPDATE"

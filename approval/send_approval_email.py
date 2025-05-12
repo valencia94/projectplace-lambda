@@ -14,7 +14,7 @@ import boto3
 from email.message import EmailMessage
 from botocore.exceptions import ClientError
 from decimal import Decimal
-from typing import Any, Dict
+from typing import Any, Dict, Optional      # <- added
 
 # ── ENV ─────────────────────────────────────────────────────────────
 REGION        = os.getenv("AWS_REGION", boto3.Session().region_name)
@@ -37,7 +37,7 @@ ddb   = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
 def build_html(project_name: str,
                approve_url: str,
                reject_url: str,
-               comments: str | None) -> str:
+               comments: Optional[str] = None) -> str:   # <- Optional  
     btn = ("display:inline-block;padding:10px 26px;margin:4px 6px;"
            "border-radius:4px;font-family:Arial,sans-serif;font-size:15px;"
            "color:#ffffff;text-decoration:none;")

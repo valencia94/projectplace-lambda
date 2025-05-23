@@ -79,18 +79,18 @@ def build_html(project_name, approve_url, reject_url, comments=None):
 </html>"""
 
 def lambda_handler(event, context):
-    # 1) pull in what we really need
+    # 1️⃣ Parse only project_id + recipient
     try:
-        body       = json.loads(event.get("body", event) if isinstance(event.get("body"), str) else event)
+        body = json.loads(event["body"]) if isinstance(event.get("body"), str) else event
         project_id = body["project_id"]
         recipient  = body["recipient"]
     except (KeyError, TypeError, json.JSONDecodeError):
         return {"statusCode": 400, "body": "Missing / malformed request body"}
 
-    # 2) look up the latest card for that project in Dynamo
+    # 2️⃣ Query DynamoDB for the latest card
     resp = ddb.query(
         KeyConditionExpression=Key("project_id").eq(project_id),
-        ScanIndexForward=False,  # newest first
+        ScanIndexForward=False,
         Limit=1
     )
     items = resp.get("Items", [])
@@ -103,12 +103,12 @@ def lambda_handler(event, context):
     if not pdf_key:
         return {"statusCode": 500, "body": "PDF key missing for latest card"}
 
-    # 1️⃣ Persist a new approval_token
+    # 3️⃣ Generate token + update status…
     token = str(uuid.uuid4())
     ddb.update_item(
-        Key={"project_id": project_id},
+        Key={"project_id": project_id, "card_id": card_id},
         UpdateExpression="SET approval_token=:t, approval_status=:s, sent_timestamp=:ts",
-        ExpressionAttributeValues={":t": token, ":s": "pending", ":ts": int(time.time())}
+        ExpressionAttributeValues={":t": token, ":s": "pending", ":ts": int(time.time())},
     )
     
     # 2️⃣ Read back latest record to get project name + comments + PDF key

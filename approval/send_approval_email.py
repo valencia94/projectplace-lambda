@@ -78,14 +78,18 @@ def build_html(project: str, approve_url: str, reject_url: str, comment: str | N
     </body></html>"""
 
 # ── Lambda handler ─────────────────────────────────────────────────
+    # 1️⃣ Parse body  
 def lambda_handler(event: Dict[str,Any], _ctx):
-    # 1️⃣ Parse body
     try:
-        body = json.loads(event.get("body", "{}"))
-        project_id = body["project_id"].strip()
-        recipient  = body["recipient"].strip()
-    except (KeyError, json.JSONDecodeError, AttributeError):
-        return {"statusCode":400, "body":"Missing / malformed request body"}
+        if "body" in event:
+            body = json.loads(event["body"]) if isinstance(event["body"], str) else event["body"]
+        else:
+            body = event
+        project_id = body["project_id"]
+        recipient  = body["recipient"]
+    except Exception as e:
+        return {"statusCode": 400, "body": f"Missing or malformed request body: {str(e)}"}
+
 
     # 2️⃣ Query: **DO NOT MODIFY THIS PATTERN WITHOUT REGRESSION TESTS**
     # We rely on a *composite* key schema { project_id (PK) , card_id (SK) }

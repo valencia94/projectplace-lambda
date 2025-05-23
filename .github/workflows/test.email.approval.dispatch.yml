@@ -1,40 +1,37 @@
-name: test.email.approval.dispatch
+name: Ad-hoc Acta Approval Email
 
 on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: 'ProjectPlace project_id'
+        description: "ProjectPlace project_id to process"
         required: true
       override_email:
-        description: 'Extra recipient e-mail'
+        description: "Recipient e-mail address"
         required: true
 
 jobs:
-  lookup_and_send:
+  send-approval:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set up Python 3.9
+      - name: 🐍 Set up Python 3.9
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: "3.9"
 
-      - name: Install boto3
-        run: |
-          pip install --quiet boto3
+      - name: 📦 Install boto3
+        run: pip install boto3
 
-      - name: Query DynamoDB & invoke Lambda
+      - name: 🚀 Lookup project + invoke Lambda
         env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION:            ${{ secrets.AWS_REGION }}
-          TABLE_NAME:            ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-          PID:                   ${{ github.event.inputs.project_id }}
-          EMAIL:                 ${{ github.event.inputs.override_email }}
+          TABLE_NAME: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+          PID:  ${{ github.event.inputs.project_id }}
+          EMAIL:${{ github.event.inputs.override_email }}
         run: |
-          echo "🔎 Looking up project $PID and composing payload for $EMAIL"
-
           python3 - <<'PY'
           import os, json, boto3
           from boto3.dynamodb.conditions import Key
@@ -47,32 +44,33 @@ jobs:
           ddb   = boto3.resource('dynamodb', region_name=region)
           table = ddb.Table(table_name)
 
+          print(f"🔎 Querying DynamoDB for project {pid} …")
           resp  = table.query(KeyConditionExpression=Key('project_id').eq(pid))
           items = resp.get('Items', [])
+          if not items:
+              raise SystemExit("❌ project_id not found in DynamoDB")
 
-          card_id = None
-          pdf_key = None
-          for item in items:
-              if item.get('title') == 'Client_Email' and email in (item.get('comments') or []):
-                  card_id = item['card_id']
-              if not pdf_key and item.get('s3_pdf_path'):
-                  pdf_key = item['s3_pdf_path']
+          # --- pick a card_id ---
+          card_id = next((i['card_id'] for i in items
+                          if i.get('title') == 'Client_Email'), items[0]['card_id'])
 
-          if not card_id or not pdf_key:
-              raise SystemExit('❌ card_id or pdf_key not found for the given project/email')
+          # --- find a PDF key ---
+          pdf_key = next((i.get('s3_pdf_path') for i in items if i.get('s3_pdf_path')), None)
+          if not pdf_key:
+              raise SystemExit("❌ No PDF found for this project – generate Acta first!")
 
-          payload = json.dumps({
+          payload = {
               "project_id": pid,
               "card_id":    card_id,
               "recipient":  email,
               "pdf_key":    pdf_key
-          })
+          }
 
-          print("🟢 Invoking sendApprovalEmail")
+          print("📨  Invoking sendApprovalEmail …")
           boto3.client('lambda', region_name=region).invoke(
               FunctionName='sendApprovalEmail',
               InvocationType='Event',
-              Payload=payload.encode()
+              Payload=json.dumps(payload).encode()
           )
-          print("✅ Done.")
+          print("✅  Invocation queued successfully")
           PY

@@ -1,66 +1,71 @@
 #!/usr/bin/env python3
-import os, sys, zipfile, boto3, shutil, subprocess, json, pathlib, textwrap
+"""
+Re-deploy the *sendApprovalEmail* Lambda.
+– Falls back to DYNAMODB_TABLE_NAME if DYNAMODB_ENRICHMENT_TABLE is absent.
+"""
 
-def env(key: str) -> str:
-    val = os.getenv(key)
-    if not val:
-        print(f"❌  Missing env var: {key}", file=sys.stderr)
+import os, sys, zipfile, shutil, boto3
+
+def need(var: str) -> str:
+    v = os.getenv(var)
+    if not v:
+        print(f"❌ Missing env var: {var}")
         sys.exit(1)
-    return val
+    return v
 
 print("🟢  Deploying sendApprovalEmail Lambda")
 
-# ── ENV & paths ─────────────────────────────────────────────────────
-REGION       = env("AWS_REGION")
-ACCOUNT_ID   = env("AWS_ACCOUNT_ID")               # GitHub secret
-ROLE_ARN     = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectplaceLambdaRole"
+REGION       = need("AWS_REGION")
+ACCOUNT_ID   = need("AWS_ACCOUNT_ID")
+TABLE_NAME   = os.getenv("DYNAMODB_ENRICHMENT_TABLE") or need("DYNAMODB_TABLE_NAME")
+EMAIL_SOURCE = need("EMAIL_SOURCE")
+S3_BUCKET    = need("S3_BUCKET_NAME")
+API_ID       = need("ACTA_API_ID")
 
-ZIP_DIR      = pathlib.Path("deployment_zips")
-ZIP_DIR.mkdir(exist_ok=True)
+FUNCTION = "sendApprovalEmail"
+HANDLER  = "send_approval_email.lambda_handler"
+ROLE_ARN = f"arn:aws:iam::{ACCOUNT_ID}:role/ProjectplaceLambdaRole"
 
-FUNC_NAME    = "sendApprovalEmail"
-SRC_PATH     = pathlib.Path("approval/send_approval_email.py")
-ZIP_PATH     = ZIP_DIR / f"{FUNC_NAME}.zip"
-
-# ── Package ─────────────────────────────────────────────────────────
-with zipfile.ZipFile(ZIP_PATH, "w") as z:
-    z.write(SRC_PATH, arcname=SRC_PATH.name)
+ZIP_DIR  = "deployment_zips"
+SRC      = "approval/send_approval_email.py"
+os.makedirs(ZIP_DIR, exist_ok=True)
+ZIP_PATH = f"{ZIP_DIR}/{FUNCTION}.zip"
+with zipfile.ZipFile(ZIP_PATH, "w") as zf:
+    zf.write(SRC, arcname=os.path.basename(SRC))
 print(f"📦  Created {ZIP_PATH}")
 
 lambda_client = boto3.client("lambda", region_name=REGION)
 with open(ZIP_PATH, "rb") as f:
-    code_blob = f.read()
+    code = f.read()
 
-env_vars = {
-    "AWS_REGION":               REGION,
-    "DYNAMODB_ENRICHMENT_TABLE": os.environ["DYNAMODB_ENRICHMENT_TABLE"],
-    "S3_BUCKET_NAME":           os.environ["S3_BUCKET_NAME"],
-    "EMAIL_SOURCE":             os.environ["EMAIL_SOURCE"],
-    "ACTA_API_ID":              os.environ["ACTA_API_ID"],
-    "API_STAGE":                os.getenv("API_STAGE", "prod"),
+env = {
+    "DYNAMODB_TABLE_NAME": TABLE_NAME,
+    "EMAIL_SOURCE":        EMAIL_SOURCE,
+    "S3_BUCKET_NAME":      S3_BUCKET,
+    "ACTA_API_ID":         API_ID
 }
 
 try:
-    lambda_client.get_function(FunctionName=FUNC_NAME)
-    print("🔁  Updating Lambda code + config …")
-    lambda_client.update_function_code(FunctionName=FUNC_NAME, ZipFile=code_blob)
-    lambda_client.get_waiter("function_updated").wait(FunctionName=FUNC_NAME)
+    lambda_client.get_function(FunctionName=FUNCTION)
+    print("🔁 Updating code …")
+    lambda_client.update_function_code(FunctionName=FUNCTION, ZipFile=code)
+    lambda_client.get_waiter("function_updated").wait(FunctionName=FUNCTION)
     lambda_client.update_function_configuration(
-        FunctionName=FUNC_NAME,
-        Environment={"Variables": env_vars},
-        Timeout=120, MemorySize=256
+        FunctionName=FUNCTION,
+        Environment={"Variables": env},
+        Timeout=120
     )
 except lambda_client.exceptions.ResourceNotFoundException:
-    print("🚀  Creating Lambda function …")
+    print("🚀 Creating function …")
     lambda_client.create_function(
-        FunctionName=FUNC_NAME,
+        FunctionName=FUNCTION,
         Runtime="python3.9",
         Role=ROLE_ARN,
-        Handler="send_approval_email.lambda_handler",
-        Code={"ZipFile": code_blob},
-        Timeout=120, MemorySize=256,
-        Environment={"Variables": env_vars}
+        Handler=HANDLER,
+        Code={"ZipFile": code},
+        Timeout=120,
+        MemorySize=256,
+        Publish=True,
+        Environment={"Variables": env}
     )
-
-arn = lambda_client.get_function(FunctionName=FUNC_NAME)["Configuration"]["FunctionArn"]
-print(f"✅  Deployed → {arn}")
+print("✅  Lambda ready")

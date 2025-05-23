@@ -5,13 +5,6 @@ on:
     inputs:
       project_id:
         description: 'Project ID (project_id)'
-        required: true
-      recipient:
-        description: 'Recipient email for approval email delivery'
-        required: true
-      pdf_key:
-        description: 'S3 key of the Acta PDF document'
-        required: true
 
 jobs:
   send-approval:

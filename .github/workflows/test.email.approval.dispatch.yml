@@ -1,73 +1,75 @@
-# .github/workflows/adhoc_send_approval_email.yml
-name: Ad-hoc Acta Approval Email
+name: Test Dispatch Approval Email
 
 on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: 'Project / Acta ID'
+        description: 'Project ID (acta_id)'
         required: true
-      recipient:
-        description: 'Override recipient e-mail'
-        required: true
+      override_email:
+        description: 'Optional override recipient e-mail'
+        required: false
 
 jobs:
-  send-approval:
+  dispatch:
     runs-on: ubuntu-latest
-
+    env:
+      TABLE: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}  # your v2 table
+      AWS_REGION: ${{ secrets.AWS_REGION }}
     steps:
-      # ── Step 1: look up the row that has the PDF ─────────────────
-      - name: 🔎 Compose Lambda payload
-        id: prepare
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          TABLE_NAME: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-          PID:        ${{ github.event.inputs.project_id }}
-          EMAIL:      ${{ github.event.inputs.recipient }}
-        shell: python
-        run: |
-          import boto3, os, json, sys, time
-          from boto3.dynamodb.conditions import Key
-
-          region     = os.environ['AWS_REGION']
-          table_name = os.environ['TABLE_NAME']
-          pid        = os.environ['PID']
-          email      = os.environ['EMAIL']
-
-          ddb  = boto3.resource('dynamodb', region_name=region).Table(table_name)
-          rows = ddb.query(KeyConditionExpression=Key('project_id').eq(pid)).get('Items', [])
-
-          # pick the newest row that already has a PDF
-          rows = [r for r in rows if r.get('s3_pdf_path')]
-          if not rows:
-              print('::error::No PDF found for this project – generate Acta first.')
-              sys.exit(1)
-
-          rows.sort(key=lambda r: r.get('timestamp', 0), reverse=True)
-          row = rows[0]
-
-          payload = {
-              "project_id": pid,
-              "card_id":   row['card_id'],
-              "pdf_key":   row['s3_pdf_path'],
-              "recipient": email
-          }
-
-          # expose for the next step
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
-              fh.write(f"payload={json.dumps(payload)}\n")
-
-      # ── Step 2: invoke sendApprovalEmail Lambda ──────────────────
-      - name: ✉️  Invoke sendApprovalEmail Lambda
-        uses: aws-actions/aws-cli-action@v1
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ secrets.AWS_REGION }}
-          inline: |
-            aws lambda invoke \
-              --function-name sendApprovalEmail \
-              --payload '${{ steps.prepare.outputs.payload }}' \
-              --cli-binary-format raw-in-base64-out \
-              /tmp/out.json
-            cat /tmp/out.json
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Lookup latest card_id + pdf_key
+        id: lookup
+        run: |
+          PID="${{ github.event.inputs.project_id }}"
+          echo "🔎 Looking up project $PID"
+          RESP=$(aws dynamodb query \
+            --table-name "$TABLE" \
+            --key-condition-expression "project_id = :pid" \
+            --expression-attribute-values '{"":":pid":{"S":"'"$PID"'"}}' \
+            --projection-expression "card_id, s3_pdf_path" \
+            --limit 1)
+          CARD_ID=$(echo "$RESP"   | jq -r '.Items[0].card_id.S')
+          PDF_KEY=$(echo "$RESP"   | jq -r '.Items[0].s3_pdf_path.S')
+          echo "card_id=$CARD_ID"   >> $GITHUB_OUTPUT
+          echo "pdf_key=$PDF_KEY"   >> $GITHUB_OUTPUT
+
+      - name: Resolve recipient
+        id: recipient
+        run: |
+          if [[ -n "${{ github.event.inputs.override_email }}" ]]; then
+            RECIP="${{ github.event.inputs.override_email }}"
+          else
+            GET=$(aws dynamodb get-item \
+              --table-name "$TABLE" \
+              --key "{\"project_id\":{\"S\":\"${{ github.event.inputs.project_id }}\"},\"card_id\":{\"S\":\"${{ steps.lookup.outputs.card_id }}\"}}" \
+              --projection-expression "client_email")
+            RECIP=$(echo "$GET" | jq -r '.Item.client_email.S')
+          fi
+          echo "recipient=$RECIP" >> $GITHUB_OUTPUT
+
+      - name: Invoke sendApprovalEmail
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg pid "${{ github.event.inputs.project_id }}" \
+            --arg cid "${{ steps.lookup.outputs.card_id }}" \
+            --arg rec "${{ steps.recipient.outputs.recipient }}" \
+            --arg key "${{ steps.lookup.outputs.pdf_key }}" \
+            '{project_id: $pid, card_id: $cid, recipient: $rec, pdf_key: $key}')
+          echo "⏳ Invoking Lambda with payload:"
+          echo "$PAYLOAD"
+          aws lambda invoke \
+            --function-name sendApprovalEmail \
+            --cli-binary-format raw-in-base64-out \
+            --payload "$PAYLOAD" \
+            response.json
+          cat response.json

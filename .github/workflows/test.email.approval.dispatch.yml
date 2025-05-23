@@ -1,39 +1,53 @@
-name: 🚀 Ad-hoc Approval Email Dispatch
+name: Dispatch One-Off Acta Approval E-mail
 
 on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: 'Project ID (acta_id)'
+        description: "Project (Acta) ID"
         required: true
       recipient:
-        description: 'Email address to send approval request to'
+        description: "Recipient e-mail address"
         required: true
 
 jobs:
-  dispatch:
+  dispatch-test-email:
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION:           ${{ secrets.AWS_REGION }}
+      AWS_ACCOUNT_ID:       ${{ secrets.AWS_ACCOUNT_ID }}
+      DYNAMODB_ENRICHMENT_TABLE: ${{ secrets.DYNAMO_ENRICH_TABLE }}
+      S3_BUCKET_NAME:       ${{ secrets.S3_BUCKET_NAME }}
+      EMAIL_SOURCE:         ${{ secrets.EMAIL_SOURCE }}
+      ACTA_API_ID:          ${{ secrets.ACTA_API_ID }}
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: 🔧  Install boto3
+        run: pip install boto3
+
+      - name: 🔑  Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ secrets.AWS_REGION }}
+          aws-region:            ${{ env.AWS_REGION }}
 
-      - name: Invoke sendApprovalEmail Lambda
+      - name: 🚀  Deploy latest Lambda code
         run: |
+          python3 scripts/deploy_send_approval_email.py
+
+      - name: ✉️  Invoke Lambda to send e-mail
+        run: |
+          echo '{}' > payload.json
+          jq -n \
+            --arg pid  "${{ github.event.inputs.project_id }}" \
+            --arg em   "${{ github.event.inputs.recipient }}" \
+            '{project_id:$pid,recipient:$em}' > payload.json
+
           aws lambda invoke \
             --function-name sendApprovalEmail \
             --cli-binary-format raw-in-base64-out \
-            --payload '{
-              "project_id": "${{ github.event.inputs.project_id }}",
-              "recipient":  "${{ github.event.inputs.recipient }}"
-            }' \
-            response.json
+            --payload file://payload.json out.json
 
-          echo "📨 Lambda response →"
-          cat response.json
+          cat out.json

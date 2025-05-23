@@ -106,8 +106,13 @@ def lambda_handler(event: Dict[str,Any], _ctx):
     client_cards = [i for i in items if i.get("title") == "Client_Email"]
     card_row     = client_cards[0] if client_cards else items[0]
 
-    comment_raw  = card_row.get("comments") or []
-    last_comment = comment_raw[0][:250] if isinstance(comment_raw, list) and comment_raw else None
+    comment_raw = card_row.get("comments", [])
+    if isinstance(comment_raw, list) and comment_raw:
+        last_comment = comment_raw[0][:250]
+    elif isinstance(comment_raw, str):
+        last_comment = comment_raw[:250]
+    else:
+        last_comment = None
 
     pdf_key = card_row.get("s3_pdf_path") or latest_pdf_key(project_id)
     if not pdf_key:

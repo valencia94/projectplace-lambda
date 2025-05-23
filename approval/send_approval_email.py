@@ -78,15 +78,29 @@ def build_html(project_name, approve_url, reject_url, comments=None):
   </body>
 </html>"""
 
-
-def lambda_handler(event, context):
-    # 0️⃣ Parse body + inputs
+    # 1) pull in what we really need
     try:
-        body      = json.loads(event.get("body") or "{}")
-        project_id= body["project_id"]
-        recipient = body.get("recipient_override") or body["recipient"]
-    except Exception:
-        return {"statusCode":400, "body":"Missing / malformed request body"}
+        body       = json.loads(event.get("body", event) if isinstance(event.get("body"), str) else event)
+        project_id = body["project_id"]
+        recipient  = body["recipient"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return {"statusCode": 400, "body": "Missing / malformed request body"}
+
+    # 2) look up the latest card for that project in Dynamo
+    resp = ddb.query(
+        KeyConditionExpression=Key("project_id").eq(project_id),
+        ScanIndexForward=False,  # newest first
+        Limit=1
+    )
+    items = resp.get("Items", [])
+    if not items:
+        return {"statusCode": 404, "body": f"No cards found for project {project_id}"}
+
+    item    = items[0]
+    card_id = item["card_id"]
+    pdf_key = item.get("s3_pdf_path") or item.get("pdf_key")
+    if not pdf_key:
+        return {"statusCode": 500, "body": "PDF key missing for latest card"}
 
     # 1️⃣ Persist a new approval_token
     token = str(uuid.uuid4())
@@ -95,7 +109,7 @@ def lambda_handler(event, context):
         UpdateExpression="SET approval_token=:t, approval_status=:s, sent_timestamp=:ts",
         ExpressionAttributeValues={":t": token, ":s": "pending", ":ts": int(time.time())}
     )
-
+    
     # 2️⃣ Read back latest record to get project name + comments + PDF key
     resp  = ddb.query(
         KeyConditionExpression=boto3.dynamodb.conditions.Key("project_id").eq(project_id),

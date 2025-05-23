@@ -1,46 +1,69 @@
-name: Test Approval Dispatch
+# .github/workflows/deploy_and_dispatch_sendApprovalEmail.yml
+
+name: Deploy & (Optionally) Dispatch Approval Email
 
 on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: 'Project/Acta ID'
-        required: true
+        description: 'Project ID to send approval for (leave blank to skip dispatch)'
+        required: false
+        default: ''
       recipient:
-        description: 'Override recipient email'
-        required: true
+        description: 'Override recipient email (optional)'
+        required: false
+        default: ''
 
 jobs:
-  send-test-email:
+  deploy:
     runs-on: ubuntu-latest
+    outputs:
+      deployed: ${{ steps.deploy.outputs.lambda-deployed }}
     steps:
-      - name: Check out code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-region:      ${{ secrets.AWS_REGION }}
+          aws-region:            ${{ secrets.AWS_REGION }}
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
-      - name: 🔎 Invoke sendApprovalEmail
-        env:
-          DYNAMODB_ENRICHMENT_TABLE: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-          EMAIL_SOURCE:              ${{ secrets.EMAIL_SOURCE }}
-          S3_BUCKET_NAME:            ${{ secrets.S3_BUCKET_NAME }}
-          ACTA_API_ID:               ${{ secrets.ACTA_API_ID }}
-          API_STAGE:                 prod
+      - name: Deploy sendApprovalEmail Lambda
+        id: deploy
         run: |
+          python3 scripts/deploy_send_approval_email.py
+          echo "::set-output name=lambda-deployed::true"
+
+  dispatch:
+    needs: deploy
+    if: ${{ needs.deploy.outputs.deployed == 'true' && github.event.inputs.project_id != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region:            ${{ secrets.AWS_REGION }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Invoke sendApprovalEmail Lambda
+        run: |
+          PID="${{ github.event.inputs.project_id }}"
+          RECIPIENT="${{ github.event.inputs.recipient }}"
+          # build payload JSON
+          if [ -z "$RECIPIENT" ]; then
+            PAYLOAD=$( jq -n --arg pid "$PID" '{ project_id: $pid }' )
+          else
+            PAYLOAD=$( jq -n --arg pid "$PID" --arg rcpt "$RECIPIENT" '{ project_id: $pid, recipient: $rcpt }' )
+          fi
+
+          echo "🧪 Dispatching approval email → payload: $PAYLOAD"
           aws lambda invoke \
             --function-name sendApprovalEmail \
             --cli-binary-format raw-in-base64-out \
-            --payload '{
-              "project_id":"${{ github.event.inputs.project_id }}",
-              "recipient":"${{ github.event.inputs.recipient }}"
-            }' \
-            response.json \
-            --region ${{ secrets.AWS_REGION }}
+            --payload "$PAYLOAD" \
+            response.json
 
-          echo "🗒️ Response:"
+          echo "✅ Lambda response:"
           cat response.json

@@ -1,25 +1,32 @@
 name: Deploy sendApprovalEmail
 
-on:
-  workflow_dispatch:
+on: [workflow_dispatch]
 
 jobs:
-  deploy:
+  deploy-send-email:
     runs-on: ubuntu-latest
     steps:
-      # 1️⃣ Grab your code
       - uses: actions/checkout@v4
 
-      # 2️⃣ Configure AWS creds
-      - name: Configure AWS credentials
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: Configure AWS creds
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-region:            ${{ secrets.AWS_REGION }}
-          AWS_ACCOUNT_ID:        ${{ secrets.AWS_ACCOUNT_ID }}    # ← add this
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ Run your Python deploy script (zips + updates code+config)
-      - name: Deploy sendApprovalEmail Lambda
+      - name: 🚀 Deploy sendApprovalEmail
+        env:
+          AWS_REGION:           ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID:       ${{ secrets.AWS_ACCOUNT_ID }}      # ← here, under env
+          DYNAMODB_TABLE_NAME:  ${{ secrets.DYNAMODB_TABLE_NAME }}
+          EMAIL_SOURCE:         ${{ secrets.EMAIL_SOURCE }}
+          S3_BUCKET_NAME:       ${{ secrets.S3_BUCKET_NAME }}
+          ACTA_API_ID:          ${{ secrets.ACTA_API_ID }}
         run: |
           python3 scripts/deploy_send_approval_email.py

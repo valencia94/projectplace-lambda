@@ -706,7 +706,7 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
 
 def add_asistencia_table(doc, df):
     """
-    2x2 => row0 col0 => "ASISTENCIA", row0 col1 => "ASISTENCIA IKUSI"
+    2x2 => row0 col0 => "ASISTENCIA", row0 col1 => "ASISTENCIA CLIENTE"
             row1 col0 => planlet_name="ASISTENCIA"
             row1 col1 => planlet_name="ASISTENCIA CLIENTE"
     """

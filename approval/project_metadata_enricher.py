@@ -10,7 +10,6 @@ ProjectPlace → DynamoDB enrichment Lambda   v3.0  (2025-05-11)
 • No external libraries (Python 3.9 stock)
 """
 
-
 import json, os, re, time, random, math, urllib.error
 from decimal import Decimal, InvalidOperation
 from typing  import Any, Dict, Optional

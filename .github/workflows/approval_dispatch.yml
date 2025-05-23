@@ -3,8 +3,14 @@ name: Dispatch Acta Approval Email
 on:
   workflow_dispatch:
     inputs:
-      acta_id:
-        description: 'Project ID (acta_id)'
+      project_id:
+        description: 'Project ID (project_id)'
+        required: true
+      recipient:
+        description: 'Recipient email for approval email delivery'
+        required: true
+      pdf_key:
+        description: 'S3 key of the Acta PDF document'
         required: true
 
 jobs:
@@ -18,4 +24,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
           inline: |
-            aws lambda invoke               --function-name sendApprovalEmail               --payload '{"acta_id": "${{ github.event.inputs.acta_id }}"}'               response.json
+            aws lambda invoke \
+              --function-name sendApprovalEmail \
+              --payload '{\"project_id\": \"${{ github.event.inputs.project_id }}\", \"recipient\": \"${{ github.event.inputs.recipient }}\", \"pdf_key\": \"${{ github.event.inputs.pdf_key }}\"}' \
+              --cli-binary-format raw-in-base64-out \
+              response.json
+            cat response.json

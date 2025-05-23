@@ -1,75 +1,46 @@
-name: Test Dispatch Approval Email
+name: Test Approval Dispatch
 
 on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: 'Project ID (acta_id)'
+        description: 'Project/Acta ID'
         required: true
-      override_email:
-        description: 'Optional override recipient e-mail'
-        required: false
+      recipient:
+        description: 'Override recipient email'
+        required: true
 
 jobs:
-  dispatch:
+  send-test-email:
     runs-on: ubuntu-latest
-    env:
-      TABLE: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-      AWS_REGION: ${{ secrets.AWS_REGION }}
     steps:
-      - name: Configure AWS creds
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
+          aws-region:      ${{ secrets.AWS_REGION }}
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ secrets.AWS_REGION }}
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Lookup latest card_id + pdf_key
-        id: lookup
+      - name: 🔎 Invoke sendApprovalEmail
+        env:
+          DYNAMODB_ENRICHMENT_TABLE: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+          EMAIL_SOURCE:              ${{ secrets.EMAIL_SOURCE }}
+          S3_BUCKET_NAME:            ${{ secrets.S3_BUCKET_NAME }}
+          ACTA_API_ID:               ${{ secrets.ACTA_API_ID }}
+          API_STAGE:                 prod
         run: |
-          PID="${{ github.event.inputs.project_id }}"
-          echo "🔎 Scanning for project $PID…"
-          SCAN=$(aws dynamodb scan \
-            --table-name "$TABLE" \
-            --filter-expression "project_id = :pid" \
-            --expression-attribute-values '{":pid":{"S":"'"$PID"'"}}' \
-            --projection-expression "card_id,s3_pdf_path,timestamp")
-          CARD_ID=$(echo "$SCAN" | jq -r '.Items | sort_by(.timestamp.N|tonumber) | last | .card_id.S')
-          PDF_KEY=$(echo "$SCAN" | jq -r '.Items | sort_by(.timestamp.N|tonumber) | last | .s3_pdf_path.S')
-          echo "card_id=$CARD_ID" >> $GITHUB_OUTPUT
-          echo "pdf_key=$PDF_KEY" >> $GITHUB_OUTPUT
-
-      - name: Resolve recipient
-        id: recipient
-        run: |
-          if [[ -n "${{ github.event.inputs.override_email }}" ]]; then
-            RECIP="${{ github.event.inputs.override_email }}"
-          else
-            echo "📥 Fetching stored client_email…"
-            GET=$(aws dynamodb get-item \
-              --table-name "$TABLE" \
-              --key "{\"project_id\":{\"S\":\"${{ github.event.inputs.project_id }}\"},\"card_id\":{\"S\":\"${{ steps.lookup.outputs.card_id }}\"}}" \
-              --projection-expression "client_email")
-            RECIP=$(echo "$GET" | jq -r '.Item.client_email.S')
-          fi
-          echo "recipient=$RECIP" >> $GITHUB_OUTPUT
-
-      - name: Invoke sendApprovalEmail
-        run: |
-          PAYLOAD=$(jq -n \
-            --arg pid "${{ github.event.inputs.project_id }}" \
-            --arg cid "${{ steps.lookup.outputs.card_id }}" \
-            --arg rec "${{ steps.recipient.outputs.recipient }}" \
-            --arg key "${{ steps.lookup.outputs.pdf_key }}" \
-            '{project_id: $pid, card_id: $cid, recipient: $rec, pdf_key: $key}')
-          echo "⏳ Invoking Lambda:"
-          echo "$PAYLOAD"
           aws lambda invoke \
             --function-name sendApprovalEmail \
             --cli-binary-format raw-in-base64-out \
-            --payload "$PAYLOAD" \
-            response.json
+            --payload '{
+              "project_id":"${{ github.event.inputs.project_id }}",
+              "recipient":"${{ github.event.inputs.recipient }}"
+            }' \
+            response.json \
+            --region ${{ secrets.AWS_REGION }}
+
+          echo "🗒️ Response:"
           cat response.json

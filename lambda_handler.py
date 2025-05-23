@@ -450,13 +450,6 @@ def add_project_status_table(doc, df):
             run.font.size = Pt(10)
             run.font.name = "Verdana"
 
-        if row_idx % 2 == 0:
-            for c in new_cells:
-                shade_elm = OxmlElement("w:shd")
-                shade_elm.set(qn("w:fill"), "F2F2F2")
-                c._element.get_or_add_tcPr().append(shade_elm)
-
-
 def add_commitments_table(doc, df):
     commits = df[(df.get("board_name","") == "COMPROMISOS") & (df["column_id"] == 1)]
     if commits.empty:
@@ -509,14 +502,6 @@ def add_commitments_table(doc, df):
             run = p.runs[0]
             run.font.size = Pt(10)
             run.font.name = "Verdana"
-
-        if row_idx % 2 == 0:
-            for c in new_cells:
-                shade_elm = OxmlElement("w:shd")
-                shade_elm.set(qn("w:fill"), "F2F2F2")
-                c._element.get_or_add_tcPr().append(shade_elm)
-        row_idx += 1
-
 
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")

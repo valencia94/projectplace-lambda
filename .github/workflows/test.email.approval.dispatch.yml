@@ -32,9 +32,8 @@ jobs:
           PID: ${{ github.event.inputs.project_id }}
         run: |
           echo "🔎 Looking up project_id $PID for email $EMAIL"
-          python3 <<EOF
+          python3 << EOF
 import boto3, json, os
-
 region = os.environ['AWS_REGION']
 table_name = os.environ['TABLE_NAME']
 pid = os.environ['PID']
@@ -49,16 +48,16 @@ card_id = None
 pdf_key = None
 
 for card in cards:
-    if card.get('title') == 'Client_Email' and email in card.get('comments', []):
-        card_id = card['card_id']
+  if card.get('title') == 'Client_Email' and email in card.get('comments', []):
+      card_id = card['card_id']
 
 for card in cards:
-    if card.get('s3_pdf_path'):
-        pdf_key = card['s3_pdf_path']
-        break
+  if card.get('s3_pdf_path'):
+      pdf_key = card['s3_pdf_path']
+      break
 
 if not card_id or not pdf_key:
-    raise Exception('❌ Could not find matching card_id or pdf_key')
+  raise Exception('❌ Could not find matching card_id or pdf_key')
 
 print(f'📦 Dispatching approval email to {email}')
 payload = json.dumps({

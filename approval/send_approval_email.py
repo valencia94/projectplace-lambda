@@ -107,8 +107,15 @@ def lambda_handler(event: Dict[str,Any], _ctx):
     card_row     = client_cards[0] if client_cards else items[0]
 
     comment_raw = card_row.get("comments", [])
+    
     if isinstance(comment_raw, list) and comment_raw:
-        last_comment = comment_raw[0][:250]
+        first = comment_raw[0]
+        if isinstance(first, dict):
+            last_comment = first.get("text", "")[:250]
+        elif isinstance(first, str):
+            last_comment = first[:250]
+        else:
+            last_comment = None
     elif isinstance(comment_raw, str):
         last_comment = comment_raw[:250]
     else:

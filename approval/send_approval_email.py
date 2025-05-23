@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-send_approval_email.py – v1.7
+send_approval_email.py – v1.8
 
 • Accepts only project_id + recipient
 • Finds the Client_Email card in DynamoDB → card_id
@@ -45,10 +45,9 @@ def build_html(project_name: str,
     btn = ("display:inline-block;padding:10px 26px;margin:4px 6px;"
            "border-radius:4px;font-family:Arial,sans-serif;font-size:15px;"
            "color:#ffffff;text-decoration:none;")
-    approve_btn = (f'<a href="{approve_url}" style="{btn}background:{BRAND_COLOR};">'
-                   "Approve</a>")
-    reject_btn = (f'<a href="{reject_url}" style="{btn}background:#d9534f;">"
-                  "Reject</a>")
+    approve_btn = f'<a href="{approve_url}" style="{btn}background:{BRAND_COLOR};">Approve</a>'
+    reject_btn  = f'<a href="{reject_url}"  style="{btn}background:#d9534f;">Reject</a>'
+
     comment_panel = ""
     if comments:
         comment_panel = f"""
@@ -92,7 +91,7 @@ def build_html(project_name: str,
 </body></html>"""
 
 def lambda_handler(event: Dict[str,Any], context):
-    # ── 1️⃣ Parse input ───────────────────────────────────────────────
+    # 1️⃣ Parse input
     try:
         body       = json.loads(event.get("body", "{}"))
         project_id = body["project_id"]
@@ -100,55 +99,43 @@ def lambda_handler(event: Dict[str,Any], context):
     except (KeyError, json.JSONDecodeError, TypeError):
         return {"statusCode": 400, "body": "Missing / malformed request body"}
 
-    # ── 2️⃣ Find the Client_Email card in DynamoDB ───────────────────
-    q = ddb.query(
+    # 2️⃣ Find the Client_Email card
+    resp = ddb.query(
         KeyConditionExpression=Key("project_id").eq(project_id),
         ScanIndexForward=False
     )
-    items = q.get("Items", [])
-    # filter to the row where title == "Client_Email"
-    client_rows = [i for i in items if i.get("title") == "Client_Email"]
+    client_rows = [i for i in resp.get("Items", []) if i.get("title") == "Client_Email"]
     if not client_rows:
         return {"statusCode": 404,
                 "body": f"No Client_Email row for project {project_id}"}
-    card_id = client_rows[0]["card_id"]
-    # optional: pull first comment as comment preview
-    comments = client_rows[0].get("comments") or []
-    comment_txt = comments[0] if comments else None
+    card_id    = client_rows[0]["card_id"]
+    comment_txt = (client_rows[0].get("comments") or [""])[0]
 
-    # ── 3️⃣ Auto-discover newest PDF in S3 ──────────────────────────
-    resp = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix="actas/")
-    pdfs = [
-        o for o in resp.get("Contents", [])
-        if o["Key"].lower().endswith(".pdf") and project_id in o["Key"]
-    ]
+    # 3️⃣ Pick newest PDF from S3
+    objs = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix="actas/").get("Contents", [])
+    pdfs = [o for o in objs if o["Key"].lower().endswith(".pdf") and project_id in o["Key"]]
     if not pdfs:
-        return {"statusCode": 404,
-                "body": f"No Acta PDF in S3 for project {project_id}"}
+        return {"statusCode": 404, "body": f"No Acta PDF for project {project_id}"}
     newest = max(pdfs, key=lambda o: o["LastModified"])
     pdf_key = newest["Key"]
 
-    # ── 4️⃣ Generate token + mark pending in DynamoDB ───────────────
+    # 4️⃣ Generate token + update Dynamo
     token = str(uuid.uuid4())
     ddb.update_item(
         Key={"project_id": project_id, "card_id": card_id},
-        UpdateExpression=("SET approval_token=:t,"
-                          "approval_status=:s,"
-                          "sent_timestamp=:ts"),
+        UpdateExpression="SET approval_token=:t,approval_status=:s,sent_timestamp=:ts",
         ExpressionAttributeValues={
-            ":t": token,
-            ":s": "pending",
-            ":ts": int(time.time())
+            ":t": token, ":s": "pending", ":ts": int(time.time())
         }
     )
 
-    # ── 5️⃣ Build Approve/Reject URLs ───────────────────────────────
+    # 5️⃣ Build URLs
     q_token     = urllib.parse.quote_plus(token)
     base_domain = API_BASE.split("://", 1)[1]
     approve_url = f"https://{base_domain}?token={q_token}&status=approved"
     reject_url  = f"https://{base_domain}?token={q_token}&status=rejected"
 
-    # ── 6️⃣ Fetch PDF bytes ─────────────────────────────────────────
+    # 6️⃣ Fetch PDF bytes
     try:
         pdf_bytes = s3.get_object(Bucket=BUCKET_NAME, Key=pdf_key)["Body"].read()
     except ClientError as e:
@@ -157,21 +144,18 @@ def lambda_handler(event: Dict[str,Any], context):
 
     maintype, subtype = mimetypes.guess_type(pdf_key)[0].split("/")
 
-    # ── 7️⃣ Compose & send e-mail ──────────────────────────────────
+    # 7️⃣ Send e-mail
     msg = EmailMessage()
-    proj_name = client_rows[0].get("project", {}).get("name",
-                                                      f"Project {project_id}")
-    msg["Subject"]   = f"Action required – {proj_name}"
-    msg["From"]      = EMAIL_SOURCE
-    msg["To"]        = recipient
+    proj_name = client_rows[0].get("project", {}).get("name", f"Project {project_id}")
+    msg["Subject"] = f"Action required – {proj_name}"
+    msg["From"]    = EMAIL_SOURCE
+    msg["To"]      = recipient
     msg.set_content("Please view this email in HTML format.")
     msg.add_alternative(
         build_html(proj_name, approve_url, reject_url, comment_txt),
         subtype="html"
     )
-    msg.add_attachment(pdf_bytes,
-                       maintype=maintype,
-                       subtype=subtype,
+    msg.add_attachment(pdf_bytes, maintype=maintype, subtype=subtype,
                        filename=os.path.basename(pdf_key))
 
     try:
@@ -184,7 +168,4 @@ def lambda_handler(event: Dict[str,Any], context):
         return {"statusCode": 500,
                 "body": f"SES send failed: {e.response['Error']['Message']}"}
 
-    return {
-        "statusCode": 200,
-        "body": json.dumps({"MessageId": res["MessageId"]})
-    }
+    return {"statusCode": 200, "body": json.dumps({"MessageId": res["MessageId"]})}

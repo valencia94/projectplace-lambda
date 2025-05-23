@@ -1,69 +1,76 @@
-# .github/workflows/deploy_and_dispatch_sendApprovalEmail.yml
-
-name: Deploy & (Optionally) Dispatch Approval Email
+name: Test Email Approval Dispatch
 
 on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: 'Project ID to send approval for (leave blank to skip dispatch)'
-        required: false
-        default: ''
-      recipient:
-        description: 'Override recipient email (optional)'
-        required: false
-        default: ''
+        description: 'Project ID to send approval email for'
+        required: true
+      override_email:
+        description: 'Recipient email to override'
+        required: true
 
 jobs:
-  deploy:
+  dispatch-test-email:
     runs-on: ubuntu-latest
-    outputs:
-      deployed: ${{ steps.deploy.outputs.lambda-deployed }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region:            ${{ secrets.AWS_REGION }}
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
 
-      - name: Deploy sendApprovalEmail Lambda
-        id: deploy
+      - name: Install boto3
+        run: python -m pip install boto3
+
+      - name: Lookup latest card & pdf_key
+        id: lookup
         run: |
-          python3 scripts/deploy_send_approval_email.py
-          echo "::set-output name=lambda-deployed::true"
+          python3 - << 'PYCODE'
+import os, boto3
+from boto3.dynamodb.conditions import Key
 
-  dispatch:
-    needs: deploy
-    if: ${{ needs.deploy.outputs.deployed == 'true' && github.event.inputs.project_id != '' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-region:            ${{ secrets.AWS_REGION }}
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+project_id = os.environ['PROJECT_ID']
+table_name = os.environ['DYNAMODB_ENRICHMENT_TABLE']
+ddb = boto3.resource('dynamodb', region_name=os.environ['AWS_REGION']).Table(table_name)
+
+resp = ddb.query(
+    KeyConditionExpression=Key('project_id').eq(project_id),
+    ScanIndexForward=False,  # newest first
+    Limit=1
+)
+item = resp['Items'][0]
+# export to GitHub Actions outputs
+with open(os.environ['GITHUB_OUTPUT'], 'a') as gh:
+    gh.write(f"card_id={item['card_id']}\n")
+    gh.write(f"pdf_key={item.get('pdf_key','')}\n")
+PYCODE
+        env:
+          AWS_REGION:                ${{ secrets.AWS_REGION }}
+          PROJECT_ID:                ${{ github.event.inputs.project_id }}
+          DYNAMODB_ENRICHMENT_TABLE: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
 
       - name: Invoke sendApprovalEmail Lambda
         run: |
-          PID="${{ github.event.inputs.project_id }}"
-          RECIPIENT="${{ github.event.inputs.recipient }}"
-          # build payload JSON
-          if [ -z "$RECIPIENT" ]; then
-            PAYLOAD=$( jq -n --arg pid "$PID" '{ project_id: $pid }' )
-          else
-            PAYLOAD=$( jq -n --arg pid "$PID" --arg rcpt "$RECIPIENT" '{ project_id: $pid, recipient: $rcpt }' )
-          fi
-
-          echo "🧪 Dispatching approval email → payload: $PAYLOAD"
+          payload=$(jq -c -n \
+            --arg pid "${{ github.event.inputs.project_id }}" \
+            --arg cid "${{ steps.lookup.outputs.card_id }}" \
+            --arg pdf "${{ steps.lookup.outputs.pdf_key }}" \
+            --arg rec "${{ github.event.inputs.override_email }}" \
+            '{project_id: $pid, card_id: $cid, pdf_key: $pdf, recipient: $rec}')
+          echo "🔊 Payload → $payload"
           aws lambda invoke \
             --function-name sendApprovalEmail \
             --cli-binary-format raw-in-base64-out \
-            --payload "$PAYLOAD" \
+            --payload "$payload" \
             response.json
-
-          echo "✅ Lambda response:"
           cat response.json
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION:            ${{ secrets.AWS_REGION }}

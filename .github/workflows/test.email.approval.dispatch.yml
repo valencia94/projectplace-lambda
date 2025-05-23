@@ -1,3 +1,4 @@
+# .github/workflows/test.email.approval.dispatch.yml
 name: Ad-hoc Acta Approval Email
 
 on:
@@ -25,15 +26,15 @@ jobs:
 
       - name: 🚀 Lookup project + invoke Lambda
         env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_REGION:            ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          TABLE_NAME: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-          PID:  ${{ github.event.inputs.project_id }}
-          EMAIL:${{ github.event.inputs.override_email }}
+          TABLE_NAME:            ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+          PID:                   ${{ github.event.inputs.project_id }}
+          EMAIL:                 ${{ github.event.inputs.override_email }}
         run: |
           python3 - <<'PY'
-          import os, json, boto3
+          import os, json, boto3, sys
           from boto3.dynamodb.conditions import Key
 
           region     = os.environ['AWS_REGION']
@@ -48,16 +49,16 @@ jobs:
           resp  = table.query(KeyConditionExpression=Key('project_id').eq(pid))
           items = resp.get('Items', [])
           if not items:
-              raise SystemExit("❌ project_id not found in DynamoDB")
+              sys.exit("❌ project_id not found in DynamoDB")
 
-          # --- pick a card_id ---
+          # pick preferred card_id (Client_Email) or first row
           card_id = next((i['card_id'] for i in items
                           if i.get('title') == 'Client_Email'), items[0]['card_id'])
 
-          # --- find a PDF key ---
+          # find a PDF key
           pdf_key = next((i.get('s3_pdf_path') for i in items if i.get('s3_pdf_path')), None)
           if not pdf_key:
-              raise SystemExit("❌ No PDF found for this project – generate Acta first!")
+              sys.exit("❌ No PDF found for this project – generate Acta first!")
 
           payload = {
               "project_id": pid,

@@ -11,10 +11,11 @@ send_approval_email.py – v1.6
 
 import os, uuid, json, base64, urllib.parse, mimetypes, time
 import boto3
+from boto3.dynamodb.conditions import Key           # ← **ADD THIS**
 from email.message import EmailMessage
 from botocore.exceptions import ClientError
 from decimal import Decimal
-from typing import Any, Dict, Optional  
+from typing import Any, Dict, Optional 
 
 # ── ENV ─────────────────────────────────────────────────────────────
 REGION       = os.getenv("AWS_REGION", boto3.Session().region_name)

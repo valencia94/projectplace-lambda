@@ -4,74 +4,75 @@ on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: 'Project ID to lookup in DynamoDB'
+        description: 'ProjectPlace project_id'
         required: true
       override_email:
-        description: 'Recipient email address to send approval to'
+        description: 'Extra recipient e-mail'
         required: true
 
 jobs:
-  lookup-and-send:
+  lookup_and_send:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Setup Python
+      - name: Set up Python 3.9
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
       - name: Install boto3
-        run: pip install boto3
-
-      - name: Query DynamoDB and Send Email
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          TABLE_NAME: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-          EMAIL: ${{ github.event.inputs.override_email }}
-          PID: ${{ github.event.inputs.project_id }}
         run: |
-          echo "🔎 Looking up project_id $PID for email $EMAIL"
-          python3 << EOF
-import boto3, json, os
-region = os.environ['AWS_REGION']
-table_name = os.environ['TABLE_NAME']
-pid = os.environ['PID']
-email = os.environ['EMAIL']
+          pip install --quiet boto3
 
-ddb = boto3.resource('dynamodb', region_name=region)
-table = ddb.Table(table_name)
-resp = table.query(KeyConditionExpression=boto3.dynamodb.conditions.Key('project_id').eq(pid))
-cards = resp.get('Items', [])
+      - name: Query DynamoDB & invoke Lambda
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION:            ${{ secrets.AWS_REGION }}
+          TABLE_NAME:            ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+          PID:                   ${{ github.event.inputs.project_id }}
+          EMAIL:                 ${{ github.event.inputs.override_email }}
+        run: |
+          echo "🔎 Looking up project $PID and composing payload for $EMAIL"
 
-card_id = None
-pdf_key = None
+          python3 - <<'PY'
+          import os, json, boto3
+          from boto3.dynamodb.conditions import Key
 
-for card in cards:
-  if card.get('title') == 'Client_Email' and email in card.get('comments', []):
-      card_id = card['card_id']
+          region     = os.environ['AWS_REGION']
+          table_name = os.environ['TABLE_NAME']
+          pid        = os.environ['PID']
+          email      = os.environ['EMAIL']
 
-for card in cards:
-  if card.get('s3_pdf_path'):
-      pdf_key = card['s3_pdf_path']
-      break
+          ddb   = boto3.resource('dynamodb', region_name=region)
+          table = ddb.Table(table_name)
 
-if not card_id or not pdf_key:
-  raise Exception('❌ Could not find matching card_id or pdf_key')
+          resp  = table.query(KeyConditionExpression=Key('project_id').eq(pid))
+          items = resp.get('Items', [])
 
-print(f'📦 Dispatching approval email to {email}')
-payload = json.dumps({
-  'project_id': pid,
-  'card_id': card_id,
-  'recipient': email,
-  'pdf_key': pdf_key
-})
+          card_id = None
+          pdf_key = None
+          for item in items:
+              if item.get('title') == 'Client_Email' and email in (item.get('comments') or []):
+                  card_id = item['card_id']
+              if not pdf_key and item.get('s3_pdf_path'):
+                  pdf_key = item['s3_pdf_path']
 
-client = boto3.client('lambda', region_name=region)
-client.invoke(
-  FunctionName='sendApprovalEmail',
-  InvocationType='Event',
-  Payload=payload.encode()
-)
-print('✅ Lambda triggered.')
-EOF
+          if not card_id or not pdf_key:
+              raise SystemExit('❌ card_id or pdf_key not found for the given project/email')
+
+          payload = json.dumps({
+              "project_id": pid,
+              "card_id":    card_id,
+              "recipient":  email,
+              "pdf_key":    pdf_key
+          })
+
+          print("🟢 Invoking sendApprovalEmail")
+          boto3.client('lambda', region_name=region).invoke(
+              FunctionName='sendApprovalEmail',
+              InvocationType='Event',
+              Payload=payload.encode()
+          )
+          print("✅ Done.")
+          PY

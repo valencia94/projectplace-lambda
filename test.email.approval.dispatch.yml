@@ -1,0 +1,78 @@
+name: test.email.approval.dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: 'Project ID to lookup in DynamoDB'
+        required: true
+      override_email:
+        description: 'Recipient email address to send approval to'
+        required: true
+
+jobs:
+  lookup-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install boto3
+        run: pip install boto3
+
+      - name: Query DynamoDB and Send Email
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          TABLE_NAME: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+          EMAIL: ${{ github.event.inputs.override_email }}
+          PID: ${{ github.event.inputs.project_id }}
+        run: |
+          python3 -c "
+import boto3, json, os
+
+region = os.environ['AWS_REGION']
+table_name = os.environ['TABLE_NAME']
+pid = os.environ['PID']
+email = os.environ['EMAIL']
+
+print(f'🔎 Looking up project_id {pid} in DynamoDB...')
+ddb = boto3.resource('dynamodb', region_name=region)
+table = ddb.Table(table_name)
+resp = table.query(KeyConditionExpression=boto3.dynamodb.conditions.Key('project_id').eq(pid))
+cards = resp.get('Items', [])
+
+card_id = None
+pdf_key = None
+
+for card in cards:
+  if card.get('title') == 'Client_Email' and email in card.get('comments', []):
+    card_id = card['card_id']
+for card in cards:
+  if card.get('s3_pdf_path'):
+    pdf_key = card['s3_pdf_path']
+    break
+
+if not card_id or not pdf_key:
+  raise Exception('❌ Could not find matching card_id or pdf_key')
+
+print(f'📦 Sending email to {email} with card_id={card_id}, pdf_key={pdf_key}')
+
+payload = json.dumps({
+  'project_id': pid,
+  'card_id': card_id,
+  'recipient': email,
+  'pdf_key': pdf_key
+})
+
+client = boto3.client('lambda', region_name=region)
+client.invoke(
+  FunctionName='sendApprovalEmail',
+  InvocationType='Event',
+  Payload=payload.encode()
+)
+print('✅ Lambda triggered.')
+"

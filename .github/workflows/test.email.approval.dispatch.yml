@@ -14,10 +14,10 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     env:
-      TABLE: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}  # your v2 table
+      TABLE: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS creds
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -31,17 +31,16 @@ jobs:
         id: lookup
         run: |
           PID="${{ github.event.inputs.project_id }}"
-          echo "🔎 Looking up project $PID"
-          RESP=$(aws dynamodb query \
+          echo "🔎 Scanning for project $PID…"
+          SCAN=$(aws dynamodb scan \
             --table-name "$TABLE" \
-            --key-condition-expression "project_id = :pid" \
-            --expression-attribute-values '{"":":pid":{"S":"'"$PID"'"}}' \
-            --projection-expression "card_id, s3_pdf_path" \
-            --limit 1)
-          CARD_ID=$(echo "$RESP"   | jq -r '.Items[0].card_id.S')
-          PDF_KEY=$(echo "$RESP"   | jq -r '.Items[0].s3_pdf_path.S')
-          echo "card_id=$CARD_ID"   >> $GITHUB_OUTPUT
-          echo "pdf_key=$PDF_KEY"   >> $GITHUB_OUTPUT
+            --filter-expression "project_id = :pid" \
+            --expression-attribute-values '{":pid":{"S":"'"$PID"'"}}' \
+            --projection-expression "card_id,s3_pdf_path,timestamp")
+          CARD_ID=$(echo "$SCAN" | jq -r '.Items | sort_by(.timestamp.N|tonumber) | last | .card_id.S')
+          PDF_KEY=$(echo "$SCAN" | jq -r '.Items | sort_by(.timestamp.N|tonumber) | last | .s3_pdf_path.S')
+          echo "card_id=$CARD_ID" >> $GITHUB_OUTPUT
+          echo "pdf_key=$PDF_KEY" >> $GITHUB_OUTPUT
 
       - name: Resolve recipient
         id: recipient
@@ -49,6 +48,7 @@ jobs:
           if [[ -n "${{ github.event.inputs.override_email }}" ]]; then
             RECIP="${{ github.event.inputs.override_email }}"
           else
+            echo "📥 Fetching stored client_email…"
             GET=$(aws dynamodb get-item \
               --table-name "$TABLE" \
               --key "{\"project_id\":{\"S\":\"${{ github.event.inputs.project_id }}\"},\"card_id\":{\"S\":\"${{ steps.lookup.outputs.card_id }}\"}}" \
@@ -65,7 +65,7 @@ jobs:
             --arg rec "${{ steps.recipient.outputs.recipient }}" \
             --arg key "${{ steps.lookup.outputs.pdf_key }}" \
             '{project_id: $pid, card_id: $cid, recipient: $rec, pdf_key: $key}')
-          echo "⏳ Invoking Lambda with payload:"
+          echo "⏳ Invoking Lambda:"
           echo "$PAYLOAD"
           aws lambda invoke \
             --function-name sendApprovalEmail \

@@ -21,11 +21,11 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ secrets.AWS_REGION }}
           inline: |
-            echo \
-              '{"project_id":"${{ github.event.inputs.project_id }}","recipient":"${{ github.event.inputs.recipient }}"}' \
-              > payload.json
+            echo '{"project_id":"${{ github.event.inputs.project_id }}","recipient":"${{ github.event.inputs.recipient }}"}' > payload.json
             aws lambda invoke \
               --function-name sendApprovalEmail \
               --cli-binary-format raw-in-base64-out \
-              --payload file://payload.json out.json
+              --payload file://payload.json \
+              out.json
             cat out.json
+

@@ -1,14 +1,14 @@
-# .github/workflows/test.email.approval.dispatch.yml
+# .github/workflows/adhoc_send_approval_email.yml
 name: Ad-hoc Acta Approval Email
 
 on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: "ProjectPlace project_id to process"
+        description: 'Project / Acta ID'
         required: true
-      override_email:
-        description: "Recipient e-mail address"
+      recipient:
+        description: 'Override recipient e-mail'
         required: true
 
 jobs:
@@ -16,25 +16,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🐍 Set up Python 3.9
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.9"
-
-      - name: 📦 Install boto3
-        run: pip install boto3
-
-      - name: 🚀 Lookup project + invoke Lambda
+      # ── Step 1: look up the row that has the PDF ─────────────────
+      - name: 🔎 Compose Lambda payload
+        id: prepare
         env:
-          AWS_REGION:            ${{ secrets.AWS_REGION }}
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          TABLE_NAME:            ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
-          PID:                   ${{ github.event.inputs.project_id }}
-          EMAIL:                 ${{ github.event.inputs.override_email }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          TABLE_NAME: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+          PID:        ${{ github.event.inputs.project_id }}
+          EMAIL:      ${{ github.event.inputs.recipient }}
+        shell: python
         run: |
-          python3 - <<'PY'
-          import os, json, boto3, sys
+          import boto3, os, json, sys, time
           from boto3.dynamodb.conditions import Key
 
           region     = os.environ['AWS_REGION']
@@ -42,36 +34,40 @@ jobs:
           pid        = os.environ['PID']
           email      = os.environ['EMAIL']
 
-          ddb   = boto3.resource('dynamodb', region_name=region)
-          table = ddb.Table(table_name)
+          ddb  = boto3.resource('dynamodb', region_name=region).Table(table_name)
+          rows = ddb.query(KeyConditionExpression=Key('project_id').eq(pid)).get('Items', [])
 
-          print(f"🔎 Querying DynamoDB for project {pid} …")
-          resp  = table.query(KeyConditionExpression=Key('project_id').eq(pid))
-          items = resp.get('Items', [])
-          if not items:
-              sys.exit("❌ project_id not found in DynamoDB")
+          # pick the newest row that already has a PDF
+          rows = [r for r in rows if r.get('s3_pdf_path')]
+          if not rows:
+              print('::error::No PDF found for this project – generate Acta first.')
+              sys.exit(1)
 
-          # pick preferred card_id (Client_Email) or first row
-          card_id = next((i['card_id'] for i in items
-                          if i.get('title') == 'Client_Email'), items[0]['card_id'])
-
-          # find a PDF key
-          pdf_key = next((i.get('s3_pdf_path') for i in items if i.get('s3_pdf_path')), None)
-          if not pdf_key:
-              sys.exit("❌ No PDF found for this project – generate Acta first!")
+          rows.sort(key=lambda r: r.get('timestamp', 0), reverse=True)
+          row = rows[0]
 
           payload = {
               "project_id": pid,
-              "card_id":    card_id,
-              "recipient":  email,
-              "pdf_key":    pdf_key
+              "card_id":   row['card_id'],
+              "pdf_key":   row['s3_pdf_path'],
+              "recipient": email
           }
 
-          print("📨  Invoking sendApprovalEmail …")
-          boto3.client('lambda', region_name=region).invoke(
-              FunctionName='sendApprovalEmail',
-              InvocationType='Event',
-              Payload=json.dumps(payload).encode()
-          )
-          print("✅  Invocation queued successfully")
-          PY
+          # expose for the next step
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f"payload={json.dumps(payload)}\n")
+
+      # ── Step 2: invoke sendApprovalEmail Lambda ──────────────────
+      - name: ✉️  Invoke sendApprovalEmail Lambda
+        uses: aws-actions/aws-cli-action@v1
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+          inline: |
+            aws lambda invoke \
+              --function-name sendApprovalEmail \
+              --payload '${{ steps.prepare.outputs.payload }}' \
+              --cli-binary-format raw-in-base64-out \
+              /tmp/out.json
+            cat /tmp/out.json

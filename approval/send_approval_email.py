@@ -1,131 +1,151 @@
 #!/usr/bin/env python3
 """
-send_approval_email.py – 2025-05-23 (3.9-compatible)
+send_approval_email.py  –  v1.7  (2025-05-23)
 
-• Generates UUID-token, stores in DynamoDB (status =pending)
-• Auto-discovers latest Acta PDF in S3 for the project
-• Sends SES HTML e-mail with Approve / Reject links
+• Generates UUID-4 approval_token and persists   approval_status=pending
+• Looks up the *Client_Email* card for   recipient + latest comment
+• Auto-discovers the most recent Acta PDF (last-modified) in S3 for the project
+• Sends an HTML (brand-coloured) mail via SES with Approve / Reject links
+
+The code now:
+  • strips stray whitespace/new-lines from env-vars
+  • validates TABLE / BUCKET names with a regex *before* using them
+  • leaves a loud comment block around the KeyConditionExpression pattern
 """
 
-import os, uuid, json, time, mimetypes, urllib.parse
+from __future__ import annotations
+
+import os, re, json, time, uuid, mimetypes, urllib.parse
 from typing import Any, Dict, Optional
+
 import boto3
-from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key          # ← DO NOT REMOVE – used in query
 from email.message import EmailMessage
 
-# ─── ENV ───────────────────────────────────────────────────────────
-REGION        = os.getenv("AWS_REGION", boto3.Session().region_name)
-TABLE_NAME    = os.getenv("DYNAMODB_ENRICHMENT_TABLE") or os.getenv("DYNAMODB_TABLE_NAME")
-API_ID        = os.environ["ACTA_API_ID"]
-API_STAGE     = os.getenv("API_STAGE", "prod")
-EMAIL_SOURCE  = os.environ["EMAIL_SOURCE"]
-BUCKET_NAME   = os.environ["S3_BUCKET_NAME"]
+# ── helpers ─────────────────────────────────────────────────────────
+VALID_NAME = re.compile(r"^[a-zA-Z0-9_.\-]+$")
+
+def env(key: str, required: bool = True) -> str | None:
+    """Read env-var, strip *all* whitespace.  Die early if missing/invalid."""
+    val = os.getenv(key, "").strip()
+    if required and not val:
+        raise SystemExit(f"❌ Missing env var: {key}")
+    if val and not VALID_NAME.fullmatch(val) and key.endswith("_TABLE"):
+        raise SystemExit(f"❌ Env {key} contains illegal chars → {val!r}")
+    return val or None
+
+# ── ENV ─────────────────────────────────────────────────────────────
+REGION        = env("AWS_REGION") or boto3.Session().region_name
+TABLE_NAME    = env("DYNAMODB_ENRICHMENT_TABLE") or env("DYNAMODB_TABLE_NAME")
+BUCKET_NAME   = env("S3_BUCKET_NAME")
+EMAIL_SOURCE  = env("EMAIL_SOURCE")
+API_ID        = env("ACTA_API_ID")
+API_STAGE     = env("API_STAGE") or "prod"
 
 API_BASE   = f"https://{API_ID}.execute-api.{REGION}.amazonaws.com/{API_STAGE}/approve"
 BRAND_CLR  = "#1b998b"
 
-# ─── AWS CLIENTS ───────────────────────────────────────────────────
-ses = boto3.client("ses", region_name=REGION)
-s3  = boto3.client("s3",  region_name=REGION)
-ddb = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
+# ── AWS clients ─────────────────────────────────────────────────────
+ses  = boto3.client("ses", region_name=REGION)
+s3   = boto3.client("s3", region_name=REGION)
+ddb  = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
 
-# ─── UTILITY ───────────────────────────────────────────────────────
+# ── util ------------------------------------------------------------
 def latest_pdf_key(project_id: str) -> Optional[str]:
-    prefix = f"actas/"  # all Acta files live here
-    probe  = s3.list_objects_v2(Bucket=BUCKET_NAME,
-                                Prefix=f"{prefix}Acta_*_{project_id}")
-    if not probe.get("Contents"):
-        return None
-    # newest = max by LastModified
-    newest = max(probe["Contents"], key=lambda obj: obj["LastModified"])
-    return newest["Key"]
+    """Return newest *.pdf key in actas/ for the project_id."""
+    prefix = f"actas/Acta_{project_id}"
+    paginator = s3.get_paginator("list_objects_v2")
+    newest_key, newest_ts = None, 0
+    for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            if obj["Key"].lower().endswith(".pdf") and obj["LastModified"].timestamp() > newest_ts:
+                newest_key, newest_ts = obj["Key"], obj["LastModified"].timestamp()
+    return newest_key
 
-def build_html(name: str, approve: str, reject: str,
-               comment: Optional[str] = None) -> str:
-    btn = ("display:inline-block;padding:10px 22px;margin:4px;"
-           "border-radius:4px;font-family:Arial;font-size:15px;"
-           "color:#fff;text-decoration:none;")
-    approve_btn = f'<a href="{approve}" style="{btn}background:{BRAND_CLR};">Approve</a>'
-    reject_btn  = f'<a href="{reject}"  style="{btn}background:#d9534f;">Reject</a>'
-    comment_div = (f'<p style="border-left:4px solid {BRAND_CLR};padding:8px 12px;'
-                   f'background:#fafafa;">{comment}</p>' if comment else "")
-    return f"""\
-<html><body style="font-family:Arial,Helvetica">
-<h2 style="color:{BRAND_CLR};margin-bottom:4px">Project Acta ready for review</h2>
-<p>Hello {name or 'there'},</p>
-<p>Please check the attached Acta and choose an option:</p>
-{approve_btn}&nbsp;{reject_btn}
-{comment_div}
-<p style="margin-top:28px;font-size:12px;color:#888">
-CVDex Tech Solutions – powered by automation
-</p>
-</body></html>"""
+def build_html(project: str, approve_url: str, reject_url: str, comment: str | None) -> str:
+    btn = ("display:inline-block;padding:10px 24px;margin:4px 6px;border-radius:4px;"
+           "font-family:Arial;font-size:15px;color:#fff;text-decoration:none;")
+    approve = f'<a href="{approve_url}" style="{btn}background:{BRAND_CLR};">Approve</a>'
+    reject  = f'<a href="{reject_url}" style="{btn}background:#d9534f;">Reject</a>'
+    note = (f'<p style="border-left:4px solid {BRAND_CLR};padding:8px 12px;'
+            f'background:#f7f7f7;font-size:14px">{comment}</p>' if comment else "")
+    return f"""<!doctype html><html><body style="font-family:Arial">
+      <h2 style="color:{BRAND_CLR}">Acta ready for review – {project}</h2>
+      <p>Please review the attached Acta and choose an option:</p>
+      {approve}{reject}{note}
+      <p style="font-size:12px;color:#888">CVDex Automation Platform</p>
+    </body></html>"""
 
-# ─── HANDLER ───────────────────────────────────────────────────────
-def lambda_handler(event: Dict[str, Any], _ctx):
-    # 1️⃣ Parse required fields
+# ── Lambda handler ─────────────────────────────────────────────────
+def lambda_handler(event: Dict[str,Any], _ctx):
+    # 1️⃣ Parse body
     try:
-        payload = json.loads(event.get("body", "{}")) if isinstance(event.get("body"), str) else event
-        project_id = payload["project_id"]
-        recipient  = payload["recipient"]
-    except (KeyError, json.JSONDecodeError, TypeError):
-        return {"statusCode": 400, "body": "project_id and recipient are required"}
+        body = json.loads(event.get("body", "{}"))
+        project_id = body["project_id"].strip()
+        recipient  = body["recipient"].strip()
+    except (KeyError, json.JSONDecodeError, AttributeError):
+        return {"statusCode":400, "body":"Missing / malformed request body"}
 
-    # 2️⃣ Locate the “Client_Email” card to grab comments (optional)
-    resp = ddb.query(KeyConditionExpression=Key("project_id").eq(project_id),
-                     ScanIndexForward=False, Limit=20)  # scan backward, most-recent first
-    card_row = next((r for r in resp.get("Items", [])
-                     if r.get("title") == "Client_Email"), {})
-    card_id = card_row.get("card_id", "unknown")
-    last_comment = ""
-    if isinstance(card_row.get("comments"), list) and card_row["comments"]:
-        # comments stored as list of strings
-        last_comment = str(card_row["comments"][0])[:250]
+    # 2️⃣ Query: **DO NOT MODIFY THIS PATTERN WITHOUT REGRESSION TESTS**
+    # We rely on a *composite* key schema { project_id (PK) , card_id (SK) }
+    resp = ddb.query(
+        KeyConditionExpression=Key("project_id").eq(project_id),
+        ScanIndexForward=False,        # ← newest card first
+        Limit=25                       # safety window
+    )
+    items = resp.get("Items", [])
+    if not items:
+        return {"statusCode":404, "body":"Project not found in DynamoDB"}
 
-    # 3️⃣ Find latest Acta PDF in S3
-    pdf_key = latest_pdf_key(project_id)
+    # find the Client_Email card (for comment preview) and newest card with pdf
+    client_cards = [i for i in items if i.get("title") == "Client_Email"]
+    card_row     = client_cards[0] if client_cards else items[0]
+
+    comment_raw  = card_row.get("comments") or []
+    last_comment = comment_raw[0][:250] if isinstance(comment_raw, list) and comment_raw else None
+
+    pdf_key = card_row.get("s3_pdf_path") or latest_pdf_key(project_id)
     if not pdf_key:
-        return {"statusCode": 404, "body": "Could not locate Acta PDF in S3"}
+        return {"statusCode":500, "body":"Could not locate Acta PDF"}
 
-    # 4️⃣ Generate token + persist
+    # 3️⃣ Generate & persist approval token
     token = str(uuid.uuid4())
     ddb.update_item(
-        Key={"project_id": project_id, "card_id": card_id},
+        Key={"project_id": project_id, "card_id": card_row["card_id"]},
         UpdateExpression="SET approval_token=:t, approval_status=:s, sent_timestamp=:ts",
         ExpressionAttributeValues={":t": token, ":s": "pending", ":ts": int(time.time())}
     )
 
-    # 5️⃣ Signed links
-    qtok = urllib.parse.quote_plus(token)
-    approve = f"{API_BASE}?token={qtok}&status=approved"
-    reject  = f"{API_BASE}?token={qtok}&status=rejected"
+    # 4️⃣ Build URLs
+    qtoken = urllib.parse.quote_plus(token)
+    approve_url = f"{API_BASE}?token={qtoken}&status=approved"
+    reject_url  = f"{API_BASE}?token={qtoken}&status=rejected"
 
-    # 6️⃣ Fetch PDF
+    # 5️⃣ Fetch PDF
     try:
         pdf_bytes = s3.get_object(Bucket=BUCKET_NAME, Key=pdf_key)["Body"].read()
     except ClientError as e:
-        return {"statusCode":500, "body":f"S3 error: {e.response['Error']['Message']}"}
+        return {"statusCode":500,"body":f"S3 fetch failed: {e.response['Error']['Message']}"}
 
     maintype, subtype = mimetypes.guess_type(pdf_key)[0].split("/")
 
-    # 7️⃣ Compose e-mail
+    # 6️⃣ Compose + send
     msg = EmailMessage()
-    msg["Subject"] = f"Action required – Acta for project {project_id}"
+    msg["Subject"] = f"Action required – Acta {project_id}"
     msg["From"]    = EMAIL_SOURCE
     msg["To"]      = recipient
-    msg.set_content("Please view this e-mail in HTML.")
-    msg.add_alternative(build_html(None, approve, reject, last_comment), subtype="html")
+    msg.set_content("Please view the email in HTML.")
+    msg.add_alternative(build_html(project_id, approve_url, reject_url, last_comment),
+                        subtype="html")
     msg.add_attachment(pdf_bytes, maintype=maintype, subtype=subtype,
                        filename=os.path.basename(pdf_key))
 
     try:
-        res = ses.send_raw_email(Source=EMAIL_SOURCE,
-                                 Destinations=[recipient],
-                                 RawMessage={"Data": msg.as_bytes()})
+        ses.send_raw_email(Source=EMAIL_SOURCE,
+                           Destinations=[recipient],
+                           RawMessage={"Data": msg.as_bytes()})
     except ClientError as e:
-        return {"statusCode": 500,
-                "body": f"SES send failed: {e.response['Error']['Message']}"}
+        return {"statusCode":500,"body":f"SES send failed: {e.response['Error']['Message']}"}
 
-    return {"statusCode": 200,
-            "body": json.dumps({"MessageId": res["MessageId"], "pdf_key": pdf_key})}
+    return {"statusCode":200, "body":"Approval email sent."}

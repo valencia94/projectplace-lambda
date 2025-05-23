@@ -722,7 +722,7 @@ def add_asistencia_table(doc, df):
 
     # CHANGED: "ASISTENCIA" → "ASISTENCIA CLIENTE"
     hdr_cells[0].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    hdr_cells[0].text = "ASISTENCIA CLIENTE"  # <--- CHANGED
+    hdr_cells[0].text = "ASISTENCIA IKUSI"  # <--- CHANGED
     run0 = hdr_cells[0].paragraphs[0].runs[0]
     run0.bold = True
     run0.font.size = Pt(12)
@@ -733,7 +733,7 @@ def add_asistencia_table(doc, df):
     hdr_cells[0]._element.get_or_add_tcPr().append(shading_elm0)
 
     hdr_cells[1].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    hdr_cells[1].text = "ASISTENCIA IKUSI"
+    hdr_cells[1].text = "ASISTENCIA CLIENTE"
     run1 = hdr_cells[1].paragraphs[0].runs[0]
     run1.bold = True
     run1.font.size = Pt(12)

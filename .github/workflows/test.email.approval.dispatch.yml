@@ -13,7 +13,6 @@ on:
 jobs:
   dispatch-test-email:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -32,24 +31,26 @@ jobs:
         id: lookup
         run: |
           python3 - << 'PYCODE'
-import os, boto3
-from boto3.dynamodb.conditions import Key
+          import os, boto3
+          from boto3.dynamodb.conditions import Key
 
-project_id = os.environ['PROJECT_ID']
-table_name = os.environ['DYNAMODB_ENRICHMENT_TABLE']
-ddb = boto3.resource('dynamodb', region_name=os.environ['AWS_REGION']).Table(table_name)
+          project_id = os.environ['PROJECT_ID']
+          table_name = os.environ['DYNAMODB_ENRICHMENT_TABLE']
+          ddb = boto3.resource('dynamodb',
+                               region_name=os.environ['AWS_REGION']
+                              ).Table(table_name)
 
-resp = ddb.query(
-    KeyConditionExpression=Key('project_id').eq(project_id),
-    ScanIndexForward=False,  # newest first
-    Limit=1
-)
-item = resp['Items'][0]
-# export to GitHub Actions outputs
-with open(os.environ['GITHUB_OUTPUT'], 'a') as gh:
-    gh.write(f"card_id={item['card_id']}\n")
-    gh.write(f"pdf_key={item.get('pdf_key','')}\n")
-PYCODE
+          resp = ddb.query(
+              KeyConditionExpression=Key('project_id').eq(project_id),
+              ScanIndexForward=False,
+              Limit=1
+          )
+          item = resp['Items'][0]
+          # export to GitHub Actions outputs
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as gh:
+              gh.write(f"card_id={item['card_id']}\n")
+              gh.write(f"pdf_key={item.get('pdf_key','')}\n")
+          PYCODE
         env:
           AWS_REGION:                ${{ secrets.AWS_REGION }}
           PROJECT_ID:                ${{ github.event.inputs.project_id }}

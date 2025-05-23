@@ -78,6 +78,7 @@ def build_html(project_name, approve_url, reject_url, comments=None):
   </body>
 </html>"""
 
+def lambda_handler(event, context):
     # 1) pull in what we really need
     try:
         body       = json.loads(event.get("body", event) if isinstance(event.get("body"), str) else event)

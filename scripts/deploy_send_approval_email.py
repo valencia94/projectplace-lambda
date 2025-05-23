@@ -38,11 +38,11 @@ lambda_client = boto3.client("lambda", region_name=REGION)
 with open(ZIP_PATH, "rb") as f:
     code = f.read()
 
-env = {
-    "DYNAMODB_TABLE_NAME": TABLE_NAME,
-    "EMAIL_SOURCE":        EMAIL_SOURCE,
-    "S3_BUCKET_NAME":      S3_BUCKET,
-    "ACTA_API_ID":         API_ID
+env_vars = {
+    "DYNAMODB_TABLE_NAME": TABLE_NAME,        # ← keep v3 fallback
+    "EMAIL_SOURCE": EMAIL_SOURCE,
+    "S3_BUCKET_NAME": S3_BUCKET,
+    "ACTA_API_ID": API_ID
 }
 
 try:

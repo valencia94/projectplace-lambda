@@ -10,13 +10,13 @@ ProjectPlace → DynamoDB enrichment Lambda   v3.0  (2025-05-11)
 • No external libraries (Python 3.9 stock)
 """
 
-import os, uuid, json, base64, urllib.parse, mimetypes, time
+
+import json, os, re, time, random, math, urllib.error
+from decimal import Decimal, InvalidOperation
+from typing  import Any, Dict, Optional
+from urllib  import request, parse
 import boto3
 from boto3.dynamodb.conditions import Key           # ← **ADD THIS**
-from email.message import EmailMessage
-from botocore.exceptions import ClientError
-from decimal import Decimal
-from typing import Any, Dict, Optional
 
 # ─────────── ENV / CLIENTS ──────────────────────────────────────────
 REGION      = os.getenv("AWS_REGION", boto3.Session().region_name)

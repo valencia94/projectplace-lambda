@@ -1,25 +1,35 @@
-name: Dispatch Acta Approval Email
-
+name: Dispatch One-Off Acta Approval Email
 on:
   workflow_dispatch:
     inputs:
       project_id:
-        description: 'Project ID (project_id)'
+        description: 'Project ID'
+        required: true
+      recipient:
+        description: 'E-mail to send Acta to'
+        required: true
 
 jobs:
   send-approval:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     steps:
-      - name: Send Email
-        uses: aws-actions/aws-cli-action@v1
+      - name: Configure AWS creds
+        uses: aws-actions/configure-aws-credentials@v4
         with:
+          aws-region: ${{ secrets.AWS_REGION }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-          inline: |
-            aws lambda invoke \
-              --function-name sendApprovalEmail \
-              --payload '{\"project_id\": \"${{ github.event.inputs.project_id }}\", \"recipient\": \"${{ github.event.inputs.recipient }}\", \"pdf_key\": \"${{ github.event.inputs.pdf_key }}\"}' \
-              --cli-binary-format raw-in-base64-out \
-              response.json
-            cat response.json
+
+      - name: Invoke Lambda
+        run: |
+          set -euo pipefail
+          PAY='{"project_id":"${{ inputs.project_id }}","recipient":"${{ inputs.recipient }}"}'
+          aws lambda invoke \
+            --function-name sendApprovalEmail \
+            --cli-binary-format raw-in-base64-out \
+            --payload "$PAY" out.json
+          cat out.json
+          jq -e '.statusCode == 200' out.json

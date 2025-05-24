@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-send_approval_email.py – v1.7.2  (2025-05-23)
+send_approval_email.py – v1.7.3  (2025-05-24)
 
 • Generates a UUID-4 approval_token, persists status=pending
 • Looks up *Client_Email* card for recipient + latest comment
@@ -157,12 +157,23 @@ def lambda_handler(event: Dict[str, Any], _ctx):
 
     # ── 4. Persist approval token ─────────────────────────────────
     token = str(uuid.uuid4())
+    sent_ts = datetime.utcnow().isoformat() + "Z"
+    
     ddb.update_item(
         Key={"project_id": project_id, "card_id": card_row["card_id"]},
-        UpdateExpression="SET approval_token=:t, approval_status=:s, sent_timestamp=:ts",
-        ExpressionAttributeValues={":t": token, ":s": "pending", ":ts": int(time.time())}
+        UpdateExpression=(
+            "SET approval_token = :t, "
+            "approval_status = :s, "
+            "sent_timestamp = :ts, "
+            "approval_sent_timestamp = :ts"
+        ),
+        ExpressionAttributeValues={
+            ":t": token,
+            ":s": "pending",
+            ":ts": sent_ts
+        }
     )
-
+    
     # ── 5. Build URLs ─────────────────────────────────────────────
     q = urllib.parse.quote_plus(token)
     approve_url = f"{API_BASE}?token={q}&status=approved"

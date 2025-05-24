@@ -121,19 +121,20 @@ def lambda_handler(event: Dict[str,Any], _ctx):
     else:
         last_comment = None
 
-    def latest_pdf_key(project_id: str) -> Optional[str]:
-        """Return the newest *.pdf in 'actas/' that includes the project_id."""
-        paginator = s3.get_paginator("list_objects_v2")
-        newest_key, newest_ts = None, 0
-        for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix="actas/"):
-            for obj in page.get("Contents", []):
-                key = obj["Key"]
-                if (project_id in key) and key.lower().endswith(".pdf"):
-                    mod_time = obj["LastModified"].timestamp()
-                    if mod_time > newest_ts:
-                        newest_key, newest_ts = key, mod_time
-        return newest_key
-
+    # 2️⃣ Try to discover latest PDF key from S3 or card
+    try:
+        pdf_key = card_row.get("s3_pdf_path") or latest_pdf_key(project_id)
+    if not pdf_key:
+        return {"statusCode":500, "body":"Could not locate Acta PDF"}
+    
+    # 3️⃣ Fetch PDF
+    try:
+        pdf_bytes = s3.get_object(Bucket=BUCKET_NAME, Key=pdf_key)["Body"].read()
+    except ClientError as e:
+        return {"statusCode":500,"body":f"S3 fetch failed: {e.response['Error']['Message']}"}
+      
+    maintype, subtype = mimetypes.guess_type(pdf_key)[0].split("/")  
+  
     # 3️⃣ Generate & persist approval token
     token = str(uuid.uuid4())
     ddb.update_item(
@@ -146,14 +147,6 @@ def lambda_handler(event: Dict[str,Any], _ctx):
     qtoken = urllib.parse.quote_plus(token)
     approve_url = f"{API_BASE}?token={qtoken}&status=approved"
     reject_url  = f"{API_BASE}?token={qtoken}&status=rejected"
-
-    # 5️⃣ Fetch PDF
-    try:
-        pdf_bytes = s3.get_object(Bucket=BUCKET_NAME, Key=pdf_key)["Body"].read()
-    except ClientError as e:
-        return {"statusCode":500,"body":f"S3 fetch failed: {e.response['Error']['Message']}"}
-
-    maintype, subtype = mimetypes.guess_type(pdf_key)[0].split("/")
 
     # 6️⃣ Compose + send
     msg = EmailMessage()

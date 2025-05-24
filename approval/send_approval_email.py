@@ -125,7 +125,7 @@ def lambda_handler(event: Dict[str,Any], _ctx):
     pdf_key = card_row.get("s3_pdf_path") or latest_pdf_key(project_id)
     if not pdf_key:
         return {"statusCode":500, "body":"Could not locate Acta PDF"}
-    
+
     # 3️⃣ Fetch PDF
     try:
         pdf_bytes = s3.get_object(Bucket=BUCKET_NAME, Key=pdf_key)["Body"].read()

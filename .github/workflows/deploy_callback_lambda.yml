@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AWS_REGION: us-east-2
-      FUNCTION_NAME: handle_approval_callback
+      FUNCTION_NAME: handleApprovalCallback   # ✅ updated name
       API_ID: 4r0pt34gx4
       STAGE_NAME: prod
 

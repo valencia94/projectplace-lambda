@@ -64,20 +64,22 @@ def lambda_handler(event, context):
         ":s": status,
         ":ts": datetime.datetime.utcnow().isoformat() + "Z"
     }
-
+    
     if comment:
         update_expr += ", approval_comment = :c"
         expr_values[":c"] = comment
-
+    
     table.update_item(
         Key=pk,
         UpdateExpression=update_expr,
         ExpressionAttributeValues=expr_values
     )
-
-    comment_block = f"<p><strong>Comment:</strong> {comment}</p>" if comment else ""
-    return _html(200, "Thank you for your response",
-                 f"The Acta has been successfully marked as <b>{status.upper()}</b>.<br>{comment_block}")
+    
+    msg = "The Acta has been successfully marked as <b>{}</b>.".format(status.upper())
+    if comment:
+        msg += "<br><p><strong>Comment:</strong> {}</p>".format(comment)
+    
+    return _html(200, "Thank you for your response", msg)
 
 # ─── helpers ───────────────────────────────────────────────────────────
 def _gsi_exists() -> bool:

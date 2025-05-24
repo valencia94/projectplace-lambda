@@ -1,33 +1,20 @@
 #!/usr/bin/env python3
 """
-send_approval_email.py  –  v1.7  (2025-05-23)
-
-• Generates UUID-4 approval_token and persists   approval_status=pending
-• Looks up the *Client_Email* card for   recipient + latest comment
-• Auto-discovers the most recent Acta PDF (last-modified) in S3 for the project
-• Sends an HTML (brand-coloured) mail via SES with Approve / Reject links
-
-The code now:
-  • strips stray whitespace/new-lines from env-vars
-  • validates TABLE / BUCKET names with a regex *before* using them
-  • leaves a loud comment block around the KeyConditionExpression pattern
+send_approval_email.py – v1.7.1
 """
 
 from __future__ import annotations
-
 import os, re, json, time, uuid, mimetypes, urllib.parse
 from typing import Any, Dict, Optional
-
 import boto3
 from botocore.exceptions import ClientError
-from boto3.dynamodb.conditions import Key          # ← DO NOT REMOVE – used in query
+from boto3.dynamodb.conditions import Key
 from email.message import EmailMessage
 
 # ── helpers ─────────────────────────────────────────────────────────
-VALID_NAME = re.compile(r"^[a-zA-Z0-9_.\-]+$")
+VALID_NAME = re.compile(r"^[a-zA-Z0-9_.\\-]+$")
 
 def env(key: str, required: bool = True) -> str | None:
-    """Read env-var, strip *all* whitespace.  Die early if missing/invalid."""
     val = os.getenv(key, "").strip()
     if required and not val:
         raise SystemExit(f"❌ Missing env var: {key}")
@@ -43,31 +30,32 @@ EMAIL_SOURCE  = env("EMAIL_SOURCE")
 API_ID        = env("ACTA_API_ID")
 API_STAGE     = env("API_STAGE") or "prod"
 
-API_BASE   = f"https://{API_ID}.execute-api.{REGION}.amazonaws.com/{API_STAGE}/approve"
-BRAND_CLR  = "#1b998b"
+API_BASE  = f"https://{API_ID}.execute-api.{REGION}.amazonaws.com/{API_STAGE}/approve"
+BRAND_CLR = "#1b998b"
 
 # ── AWS clients ─────────────────────────────────────────────────────
-ses  = boto3.client("ses", region_name=REGION)
-s3   = boto3.client("s3", region_name=REGION)
-ddb  = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
+ses = boto3.client("ses", region_name=REGION)
+s3  = boto3.client("s3",  region_name=REGION)
+ddb = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
 
 # ── util ------------------------------------------------------------
 def latest_pdf_key(project_id: str) -> Optional[str]:
-    """Return newest *.pdf key in actas/ for the project_id."""
-    prefix = f"actas/Acta_{project_id}"
+    """Return newest *.pdf in actas/ whose name ends with _<project_id>.pdf"""
     paginator = s3.get_paginator("list_objects_v2")
     newest_key, newest_ts = None, 0
-    for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix=prefix):
+    for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix="actas/"):
         for obj in page.get("Contents", []):
-            if obj["Key"].lower().endswith(".pdf") and obj["LastModified"].timestamp() > newest_ts:
-                newest_key, newest_ts = obj["Key"], obj["LastModified"].timestamp()
+            key = obj["Key"]
+            if key.lower().endswith(f"_{project_id}.pdf") \
+               and obj["LastModified"].timestamp() > newest_ts:
+                newest_key, newest_ts = key, obj["LastModified"].timestamp()
     return newest_key
 
-def build_html(project: str, approve_url: str, reject_url: str, comment: str | None) -> str:
+def build_html(project: str, approve_url: str, reject_url: str, comment: str|None)->str:
     btn = ("display:inline-block;padding:10px 24px;margin:4px 6px;border-radius:4px;"
            "font-family:Arial;font-size:15px;color:#fff;text-decoration:none;")
     approve = f'<a href="{approve_url}" style="{btn}background:{BRAND_CLR};">Approve</a>'
-    reject  = f'<a href="{reject_url}" style="{btn}background:#d9534f;">Reject</a>'
+    reject  = f'<a href="{reject_url}"  style="{btn}background:#d9534f;">Reject</a>'
     note = (f'<p style="border-left:4px solid {BRAND_CLR};padding:8px 12px;'
             f'background:#f7f7f7;font-size:14px">{comment}</p>' if comment else "")
     return f"""<!doctype html><html><body style="font-family:Arial">
@@ -78,8 +66,9 @@ def build_html(project: str, approve_url: str, reject_url: str, comment: str | N
     </body></html>"""
 
 # ── Lambda handler ─────────────────────────────────────────────────
-    # 1️⃣ Parse body  
-def lambda_handler(event: Dict[str,Any], _ctx):
+def lambda_handler(event:Dict[str,Any], _ctx):
+    # … unchanged code – parse body, query DynamoDB, build comment …
+    # (everything below latest_pdf_key() stays exactly as in your repo)
     try:
         if "body" in event:
             body = json.loads(event["body"]) if isinstance(event["body"], str) else event["body"]
@@ -89,7 +78,6 @@ def lambda_handler(event: Dict[str,Any], _ctx):
         recipient  = body["recipient"]
     except Exception as e:
         return {"statusCode": 400, "body": f"Missing or malformed request body: {str(e)}"}
-
 
     # 2️⃣ Query: **DO NOT MODIFY THIS PATTERN WITHOUT REGRESSION TESTS**
     # We rely on a *composite* key schema { project_id (PK) , card_id (SK) }

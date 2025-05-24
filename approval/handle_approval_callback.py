@@ -1,40 +1,62 @@
 #!/usr/bin/env python3
 """
-handle_approval_callback.py
-─────────────────────────────────────────────────────────────
-Receives GET /approve?token=...&status=approved|rejected  
-Looks up token in DynamoDB (GSI preferred, falls back to scan)  
-Writes approval_status + timestamp and returns branded HTML page
+handle_approval_callback.py  –  v1.2
 """
 
-import os, json, datetime, urllib.parse, boto3
-from boto3.dynamodb.conditions import Key, Attr
-from botocore.exceptions import ClientError
+import os, json, urllib.parse, datetime
+import boto3
+from typing import Any, Dict
 
 REGION      = os.getenv("AWS_REGION", boto3.Session().region_name)
-TABLE_NAME = (os.getenv("DYNAMODB_ENRICHMENT_TABLE")    # ← preferred (v2)
-              or os.getenv("DYNAMODB_TABLE_NAME"))      # ← fallback (v3
+TABLE_NAME  = os.environ["DYNAMODB_ENRICHMENT_TABLE"]
+ddb         = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
 
-ddb   = boto3.resource("dynamodb", region_name=REGION)
-table = ddb.Table(TABLE_NAME)
+HTML_OK = """<!doctype html><html><body
+  style="font-family:Arial;text-align:center;padding:48px">
+  <h2 style="color:#1b998b">Thank you – your decision was recorded.</h2>
+  {comment_block}
+  <p style="font-size:13px;color:#888">You may now close this tab.</p>
+</body></html>"""
 
-BRAND_COLOR = "#4AC795"
-HTML_TPL = """\
-<html>
-  <body style="font-family:Verdana; text-align:center; margin-top:40px">
-    <h2 style="color:{color}">{title}</h2>
-    <p>{msg}</p>
-  </body>
-</html>"""
+HTML_ERR = """<!doctype html><html><body
+  style="font-family:Arial;text-align:center;padding:48px">
+  <h2 style="color:#d9534f">Sorry – that link is invalid or expired.</h2>
+</body></html>"""
 
-def lambda_handler(event, context):
-    qs = event.get("queryStringParameters") or {}
-    token  = qs.get("token")
-    status = qs.get("status")
+def lambda_handler(event: Dict[str,Any], _ctx):
+    qs = urllib.parse.parse_qs(event["queryStringParameters"] or "")
+    token  = qs.get("token",  [""])[0]
+    status = qs.get("status", [""])[0]          # approved / rejected
+    comment = (qs.get("comment", [""])[0]).strip()
 
-    if not token or status not in ("approved", "rejected"):
-        return _html(400, "Invalid request",
-                     "Missing or incorrect parameters in the URL.")
+    # simple lookup by GSI (token)
+    resp = ddb.query(
+        IndexName="approval_token-index",
+        KeyConditionExpression=boto3.dynamodb.conditions.Key("approval_token").eq(token),
+        Limit=1
+    )
+    if not resp["Items"]:
+        return {"statusCode": 400, "headers":{"Content-Type":"text/html"}, "body": HTML_ERR}
+
+    row = resp["Items"][0]
+
+    ddb.update_item(
+        Key={"project_id": row["project_id"], "card_id": row["card_id"]},
+        UpdateExpression="SET approval_status=:s, approval_timestamp=:ts"
+                         + (", approval_comment=:c" if comment else ""),
+        ExpressionAttributeValues={
+            ":s": status,
+            ":ts": datetime.datetime.utcnow().isoformat(timespec="seconds"),
+            **({":c": comment} if comment else {})
+        }
+    )
+
+    c_block = (f'<p style="border-left:4px solid #1b998b;padding:12px;background:#f7f7f7">'
+               f"<em>Your comment:</em><br>{urllib.parse.unquote_plus(comment)}</p>"
+               if comment else "")
+    return {"statusCode": 200,
+            "headers": {"Content-Type": "text/html"},
+            "body": HTML_OK.format(comment_block=c_block)}
 
     # ── 1. Find record by approval_token ───────────────────────────
     try:

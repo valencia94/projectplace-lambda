@@ -122,8 +122,7 @@ def lambda_handler(event: Dict[str,Any], _ctx):
         last_comment = None
 
     # 2️⃣ Try to discover latest PDF key from S3 or card
-    try:
-        pdf_key = card_row.get("s3_pdf_path") or latest_pdf_key(project_id)
+    pdf_key = card_row.get("s3_pdf_path") or latest_pdf_key(project_id)
     if not pdf_key:
         return {"statusCode":500, "body":"Could not locate Acta PDF"}
     
@@ -133,7 +132,8 @@ def lambda_handler(event: Dict[str,Any], _ctx):
     except ClientError as e:
         return {"statusCode":500,"body":f"S3 fetch failed: {e.response['Error']['Message']}"}
       
-    maintype, subtype = mimetypes.guess_type(pdf_key)[0].split("/")  
+    mime_type = mimetypes.guess_type(pdf_key)[0] or "application/pdf"
+    maintype, subtype = mime_type.split("/")
   
     # 3️⃣ Generate & persist approval token
     token = str(uuid.uuid4())

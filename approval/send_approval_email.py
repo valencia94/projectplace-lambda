@@ -60,18 +60,56 @@ def latest_pdf_key(project_id: str) -> Optional[str]:
     return newest_key
 
 def build_html(project: str, approve: str, reject: str, comment: str | None) -> str:
-    btn = ("display:inline-block;padding:10px 24px;margin:4px 6px;border-radius:4px;"
-           "font-family:Arial;font-size:15px;color:#fff;text-decoration:none;")
+    btn = ("display:inline-block;padding:12px 28px;margin:0 6px;border-radius:4px;"
+           "font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#fff;text-decoration:none;")
     approve_btn = f'<a href="{approve}" style="{btn}background:{BRAND_CLR};">Approve</a>'
     reject_btn  = f'<a href="{reject}"  style="{btn}background:#d9534f;">Reject</a>'
-    note = (f'<p style="border-left:4px solid {BRAND_CLR};padding:8px 12px;'
-            f'background:#f7f7f7;font-size:14px">{comment}</p>' if comment else "")
-    return f"""<!doctype html><html><body style="font-family:Arial">
-      <h2 style="color:{BRAND_CLR}">Acta ready for review – {project}</h2>
-      <p>Please review the attached Acta and choose an option:</p>
-      {approve_btn}{reject_btn}{note}
-      <p style="font-size:12px;color:#888">CVDex Automation Platform</p>
-    </body></html>"""
+
+    comment_html = (f'''
+      <tr><td style="padding-top:22px">
+        <div style="border:1px solid #e0e0e0;border-left:4px solid {BRAND_CLR};
+                    background:#222;color:#f1f1f1;padding:14px;font-size:14px;">
+          <strong>Last comment</strong><br>{comment}
+        </div>
+      </td></tr>''' if comment else "")
+
+    return f"""\
+<!DOCTYPE html>
+<html>
+  <body style="margin:0;padding:0;background:#f5f5f5">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr><td align="center" style="padding:28px 0">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0"
+               style="border:1px solid #ddd;border-radius:6px;background:#000">
+          <tr><td style="background:{BRAND_CLR};padding:24px;
+                         font-family:Arial,Helvetica,sans-serif;font-size:22px;
+                         color:#fff;border-top-left-radius:6px;border-top-right-radius:6px">
+              Project Acta ready for review
+          </td></tr>
+
+          <tr><td style="padding:24px;font-family:Arial,Helvetica,sans-serif;
+                         font-size:15px;line-height:22px;color:#f1f1f1">
+              Hi there,<br><br>
+              Please review the attached Acta for<br>
+              <strong>{project}</strong> and choose an option:
+          </td></tr>
+
+          <tr><td align="center" style="padding:12px 0 24px 0">
+              {approve_btn}{reject_btn}
+          </td></tr>
+
+          {comment_html}
+
+          <tr><td style="padding:24px;font-family:Arial,Helvetica,sans-serif;
+                         font-size:12px;color:#888;border-top:1px solid #444">
+              CVDex Tech Solutions — empowering excellence through automation
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>"""
+
 
 # ── Lambda handler ─────────────────────────────────────────────────
 def lambda_handler(event: Dict[str, Any], _ctx):

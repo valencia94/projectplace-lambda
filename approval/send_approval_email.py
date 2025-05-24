@@ -17,6 +17,7 @@ import boto3
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 from email.message import EmailMessage
+from datetime import datetime
 
 # ── helpers ─────────────────────────────────────────────────────────
 VALID_NAME = re.compile(r"^[a-zA-Z0-9_.\-]+$")

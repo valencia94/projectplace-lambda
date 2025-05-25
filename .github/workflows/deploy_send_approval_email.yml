@@ -30,7 +30,7 @@ jobs:
         env:
           AWS_ACCOUNT_ID:       ${{ secrets.AWS_ACCOUNT_ID }}
           AWS_REGION:           ${{ secrets.AWS_REGION }}
-          DYNAMODB_TABLE_NAME:  ${{ secrets.DYNAMODB_TABLE_NAME }}
+          DYNAMODB_ENRICHMENT_TABLE: ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}   # ← NEW
           EMAIL_SOURCE:         ${{ secrets.EMAIL_SOURCE }}
           S3_BUCKET_NAME:       ${{ secrets.S3_BUCKET_NAME }}
           ACTA_API_ID:          ${{ secrets.ACTA_API_ID }}

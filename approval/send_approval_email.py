@@ -58,26 +58,37 @@ def latest_pdf_key(project_id: str) -> Optional[str]:
                 newest_key, newest_ts = key, obj["LastModified"].timestamp()
     return newest_key
 
-# ── HTML builder (anchor-link version) ─────────────────────────────
+# ── HTML builder (anchor-link version) ──────────────────────────────
 def build_html(project: str,
                approve_url: str,
                reject_url: str,
                preview: Optional[str]) -> str:
     """
-    • Renders the e-mail body.
-    • `approve_url` / `reject_url` contain the token & status.
-    • We expose those URLs as <a> buttons and let a tiny script append
-      the user’s optional comment to the link when they type.
+    Returns the complete HTML e-mail body.
+
+    * Uses semantic <a> “buttons” instead of <form> + <button>.
+    * JS rewrites the two hrefs to append the URL-encoded comment, so
+      /approve?token=…&status=approved&comment=…
+      works exactly like before.
+    * If the recipient leaves the comment blank the URLs stay as-is.
     """
     BRAND = BRAND_CLR
 
-    preview_block = f"""
-      <tr><td style="padding-top:22px">
-        <div style="border:1px solid #e0e0e0;border-left:4px solid {BRAND};
-                    background:#222;color:#f1f1f1;padding:14px;font-size:14px;">
-          <strong>Last comment</strong><br>{preview}
-        </div>
-      </td></tr>""" if preview else ""
+    btn_css = (
+        "display:inline-block;padding:12px 28px;margin:0 6px;"
+        "border-radius:4px;font-size:16px;font-family:Arial,Helvetica,sans-serif;"
+        "color:#fff;text-decoration:none;"
+    )
+
+    preview_block = (
+        f"""<tr><td style="padding-top:22px">
+              <div style="border:1px solid #e0e0e0;border-left:4px solid {BRAND};
+                          background:#222;color:#f1f1f1;padding:14px;font-size:14px;">
+                <strong>Last comment</strong><br>{preview}
+              </div>
+            </td></tr>"""
+        if preview else ""
+    )
 
     return f"""\
 <!DOCTYPE html>
@@ -88,16 +99,19 @@ def build_html(project: str,
       <table role="presentation" width="600" cellpadding="0" cellspacing="0"
              style="border:1px solid #ddd;border-radius:6px;background:#000;color:#f1f1f1;
                     font-family:Arial,Helvetica,sans-serif">
+        <!-- header ---------------------------------------------------- -->
         <tr><td style="background:{BRAND};padding:24px;font-size:22px">
             Project Acta ready for review
         </td></tr>
 
+        <!-- intro ------------------------------------------------------ -->
         <tr><td style="padding:24px;font-size:15px;line-height:22px">
             Please review the attached Acta for <b>{project}</b> and choose an option.
         </td></tr>
 
         {preview_block}
 
+        <!-- optional comment field ------------------------------------ -->
         <tr><td style="padding:0 24px 18px 24px">
           <label for="c" style="font-size:14px">Optional comment:</label><br>
           <input id="c" name="c" type="text" maxlength="240"
@@ -105,39 +119,34 @@ def build_html(project: str,
                  placeholder="Tell us why you approved or rejected…">
         </td></tr>
 
+        <!-- buttons (anchor links) ------------------------------------ -->
         <tr><td align="center" style="padding-bottom:32px">
-          <!-- plain links styled as buttons -->
-          <a id="approveLink" href="{approve_url}"
-             style="background:{BRAND};color:#fff;text-decoration:none;
-                    padding:12px 28px;border-radius:4px;font-size:16px;
-                    display:inline-block">
-             Approve
-          </a>
+          <a id="approve"
+             href="{approve_url}"
+             style="{btn_css}background:{BRAND};">Approve</a>
 
-          <a id="rejectLink"  href="{reject_url}"
-             style="background:#d9534f;color:#fff;text-decoration:none;
-                    padding:12px 28px;border-radius:4px;font-size:16px;
-                    display:inline-block;margin-left:12px">
-             Reject
-          </a>
+          <a id="reject"
+             href="{reject_url}"
+             style="{btn_css}background:#d9534f;">Reject</a>
         </td></tr>
 
+        <!-- tiny inline script -- rewrites href when comment changes -->
         <script>
-          /* append &comment=… to each link as the user types */
-          const box         = document.getElementById('c');
-          const approveBase = "{approve_url}";
-          const rejectBase  = "{reject_url}";
-          const approveLink = document.getElementById('approveLink');
-          const rejectLink  = document.getElementById('rejectLink');
+          const box = document.getElementById('c');
+          const approve = document.getElementById('approve');
+          const reject  = document.getElementById('reject');
+          const baseOK  = approve.href;
+          const baseNO  = reject.href;
 
-          function updateLinks() {{
-            const comment = encodeURIComponent(box.value.trim());
-            approveLink.href = approveBase + (comment ? "&comment=" + comment : "");
-            rejectLink.href  = rejectBase  + (comment ? "&comment=" + comment : "");
+          function upd() {{
+              const txt = encodeURIComponent(box.value.trim());
+              approve.href = txt ? baseOK + '&comment=' + txt : baseOK;
+              reject.href  = txt ? baseNO + '&comment=' + txt : baseNO;
           }}
-          box.addEventListener('input', updateLinks);
+          box.addEventListener('input', upd);
         </script>
 
+        <!-- footer ----------------------------------------------------- -->
         <tr><td style="padding:18px 24px;font-size:12px;color:#888;border-top:1px solid #444">
             CVDex Tech Solutions — empowering excellence through automation
         </td></tr>
@@ -146,6 +155,7 @@ def build_html(project: str,
   </table>
   </body>
 </html>"""
+
 
 # ── Lambda handler ─────────────────────────────────────────────────
 def lambda_handler(event: Dict[str, Any], _ctx):

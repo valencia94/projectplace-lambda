@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-handle_approval_callback.py
+handle_approval_callback.py – v1.6
 ─────────────────────────────────────────────────────────────
-Receives GET /approve?token=...&status=approved|rejected  
-Looks up token in DynamoDB (GSI preferred, falls back to scan)  
-Writes approval_status + timestamp and returns branded HTML page
+Receives GET /approve?token=...&status=approved|rejected[&comment=...]
+Looks up token in DynamoDB (GSI preferred, falls back to scan)
+Writes approval_status + timestamp (+ optional comment) and
+returns branded HTML page.
 """
 
 import os, json, datetime, urllib.parse, boto3
@@ -12,8 +13,7 @@ from boto3.dynamodb.conditions import Key, Attr
 from botocore.exceptions import ClientError
 
 REGION      = os.getenv("AWS_REGION", boto3.Session().region_name)
-TABLE_NAME = (os.getenv("DYNAMODB_ENRICHMENT_TABLE")    # ← preferred (v2)
-              or os.getenv("DYNAMODB_TABLE_NAME"))      # ← fallback (v3
+TABLE_NAME  = os.getenv("DYNAMODB_ENRICHMENT_TABLE") or os.getenv("DYNAMODB_TABLE_NAME")
 
 ddb   = boto3.resource("dynamodb", region_name=REGION)
 table = ddb.Table(TABLE_NAME)
@@ -28,25 +28,24 @@ HTML_TPL = """\
 </html>"""
 
 def lambda_handler(event, context):
-    qs = event.get("queryStringParameters") or {}
-    token  = qs.get("token")
-    status = qs.get("status")
+    qs      = event.get("queryStringParameters") or {}
+    token   = qs.get("token")
+    status  = qs.get("status")
+    # ── NEW ── capture optional comment (URL-decoded & trimmed)
+    comment = urllib.parse.unquote_plus(qs.get("comment", "")).strip()
 
     if not token or status not in ("approved", "rejected"):
         return _html(400, "Invalid request",
                      "Missing or incorrect parameters in the URL.")
-      
+
     # ── 1. Find record by approval_token ───────────────────────────
     try:
         if _gsi_exists():
-            resp = table.query(
-                IndexName="approval_token-index",
-                KeyConditionExpression=Key("approval_token").eq(token)
-            )
+            resp  = table.query(IndexName="approval_token-index",
+                                KeyConditionExpression=Key("approval_token").eq(token))
             items = resp.get("Items", [])
-        else:  # slow path – unlikely after infra patch
-            scan = table.scan(FilterExpression=Attr("approval_token").eq(token))
-            items = scan.get("Items", [])
+        else:
+            items = table.scan(FilterExpression=Attr("approval_token").eq(token)).get("Items", [])
     except ClientError as e:
         return _html(500, "Database error", e.response["Error"]["Message"])
 
@@ -54,22 +53,28 @@ def lambda_handler(event, context):
         return _html(404, "Token not found",
                      "This approval link is no longer valid.")
 
-    item = items[0]
-    pk   = {"project_id": item["project_id"], "card_id": item["card_id"]}
+    pk = {"project_id": items[0]["project_id"], "card_id": items[0]["card_id"]}
 
-    # ── 2. Write decision + timestamp ──────────────────────────────
-    table.update_item(
-        Key=pk,
-        UpdateExpression="SET approval_status=:s, approval_timestamp=:ts",
-        ExpressionAttributeValues={
-            ":s": status,
-            ":ts": datetime.datetime.utcnow().isoformat() + "Z"
-        }
-    )
+    # ── 2. Write decision + timestamp (+ optional comment) ─────────
+    update_expr = "SET approval_status=:s, approval_timestamp=:ts"
+    expr_values = {
+        ":s": status,
+        ":ts": datetime.datetime.utcnow().isoformat() + "Z"
+    }
+    if comment:                                # ← NEW (comment support)
+        update_expr += ", approval_comment=:c"
+        expr_values[":c"] = comment
 
-    return _html(200,
-                 "Thank you for your response",
-                 f"The Acta has been successfully marked as <b>{status.upper()}</b>.")
+    table.update_item(Key=pk,
+                      UpdateExpression=update_expr,
+                      ExpressionAttributeValues=expr_values)
+
+    # ── 3. Build confirmation HTML ────────────────────────────────
+    msg = "The Acta has been successfully marked as <b>{}</b>.".format(status.upper())
+    if comment:
+        msg += "<br><p><strong>Comment:</strong> {}</p>".format(comment)
+
+    return _html(200, "Thank you for your response", msg)
 
 # ─── helpers ───────────────────────────────────────────────────────────
 def _gsi_exists() -> bool:

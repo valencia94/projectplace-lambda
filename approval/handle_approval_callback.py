@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-handle_approval_callback.py – v1.6
+handle_approval_callback.py – v1.7
 ─────────────────────────────────────────────────────────────
 Receives GET /approve?token=...&status=approved|rejected[&comment=...]
 Looks up token in DynamoDB (GSI preferred, falls back to scan)

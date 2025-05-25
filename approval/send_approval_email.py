@@ -32,7 +32,7 @@ def env(key: str, required: bool = True) -> str | None:
 
 # ── ENV ─────────────────────────────────────────────────────────────
 REGION       = env("AWS_REGION") or boto3.Session().region_name
-TABLE_NAME   = env("DYNAMODB_ENRICHMENT_TABLE") or env("DYNAMODB_TABLE_NAME")
+TABLE_NAME   = env("DYNAMODB_ENRICHMENT_TABLE")
 BUCKET_NAME  = env("S3_BUCKET_NAME")
 EMAIL_SOURCE = env("EMAIL_SOURCE")
 API_ID       = env("ACTA_API_ID")

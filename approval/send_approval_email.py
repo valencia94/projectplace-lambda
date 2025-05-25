@@ -187,12 +187,12 @@ def lambda_handler(event: Dict[str, Any], _ctx):
         ExpressionAttributeValues={":t": token, ":s": "pending", ":ts": sent_ts}
     )
 
-    # 5. Build URLs
+    # 5. Build URLs ─────────────────────────────────────────────
     q           = urllib.parse.quote_plus(token)
     approve_url = f"{API_BASE}?token={q}&status=approved"
     reject_url  = f"{API_BASE}?token={q}&status=rejected"
 
-    # 6. Compose & send email
+    # 6. Compose & send email ──────────────────────────────────
     msg = EmailMessage()
     msg["Subject"] = f"Action required – Acta {project_id}"
     msg["From"]    = EMAIL_SOURCE
@@ -203,8 +203,12 @@ def lambda_handler(event: Dict[str, Any], _ctx):
         build_html(project_id, approve_url, reject_url, last_comment),
         subtype="html"
     )
-    msg.add_attachment(pdf_bytes, maintype=maintype, subtype=subtype,
-                       filename=os.path.basename(pdf_key))
+    msg.add_attachment(
+        pdf_bytes,
+        maintype=maintype,
+        subtype=subtype,
+        filename=os.path.basename(pdf_key)
+    )
 
     try:
         ses.send_raw_email(
@@ -213,7 +217,10 @@ def lambda_handler(event: Dict[str, Any], _ctx):
             RawMessage={"Data": msg.as_bytes()}
         )
     except ClientError as e:
-        return {"statusCode": 500,
-                "body": f"SES send failed: {e.response['Error']['Message']}"}
+        return {
+            "statusCode": 500,
+            "body": f"SES send failed: {e.response['Error']['Message']}"
+        }
 
     return {"statusCode": 200, "body": "Approval email sent."}
+# ── end of lambda_handler ─────────────────────────────────────────

@@ -60,12 +60,29 @@ def latest_pdf_key(project_id: str) -> Optional[str]:
                 newest_key, newest_ts = key, obj["LastModified"].timestamp()
     return newest_key
 
-def build_html(project: str, token: str, brand: str) -> str:
-    """Return fully-inlined HTML with comment box + Approve / Reject buttons."""
-    approve_url = f"{API_BASE}?token={token}&status=approved"
-    reject_url  = f"{API_BASE}?token={token}&status=rejected"
+# ── HTML builder ───────────────────────────────────────────────────
+def build_html(project: str,
+               approve_url: str,
+               reject_url: str,
+               preview: str | None) -> str:
+    """
+    Render the e-mail body.
 
-    return f"""
+    * `approve_url` / `reject_url` already contain token & status
+    * `preview` is an optional last-comment excerpt from the card
+    """
+    BRAND = BRAND_CLR  # global constant defined earlier
+
+    # Optional comment preview (e.g. last card comment)
+    preview_block = f"""
+      <tr><td style="padding-top:22px">
+        <div style="border:1px solid #e0e0e0;border-left:4px solid {BRAND};
+                    background:#222;color:#f1f1f1;padding:14px;font-size:14px;">
+          <strong>Last comment</strong><br>{preview}
+        </div>
+      </td></tr>""" if preview else ""
+
+    return f"""\
 <!DOCTYPE html>
 <html>
   <body style="margin:0;padding:0;background:#f5f5f5">
@@ -74,13 +91,16 @@ def build_html(project: str, token: str, brand: str) -> str:
       <table role="presentation" width="600" cellpadding="0" cellspacing="0"
              style="border:1px solid #ddd;border-radius:6px;background:#000;color:#f1f1f1;
                     font-family:Arial,Helvetica,sans-serif">
-        <tr><td style="background:{brand};padding:24px;font-size:22px">
+        <tr><td style="background:{BRAND};padding:24px;font-size:22px">
             Project Acta ready for review
         </td></tr>
 
         <tr><td style="padding:24px;font-size:15px;line-height:22px">
             Please review the attached Acta for <b>{project}</b> and choose an option.
         </td></tr>
+
+        <!-- Optional prior comment preview -->
+        {preview_block}
 
         <!-- Comment box -->
         <tr><td style="padding:0 24px 18px 24px">
@@ -90,22 +110,18 @@ def build_html(project: str, token: str, brand: str) -> str:
                  placeholder="Tell us why you approved or rejected…">
         </td></tr>
 
-        <!-- Approve / Reject buttons in an HTML form -->
+        <!-- Approve / Reject buttons wrapped in forms -->
         <tr><td align="center" style="padding-bottom:32px">
           <form action="{approve_url}" method="GET" style="display:inline">
-             <input type="hidden" name="token"  value="{token}">
-             <input type="hidden" name="status" value="approved">
              <input type="hidden" name="comment" id="c1">
              <button type="submit"
-                     style="background:{brand};color:#fff;border:none;padding:12px 28px;
+                     style="background:{BRAND};color:#fff;border:none;padding:12px 28px;
                             border-radius:4px;font-size:16px;cursor:pointer">
                Approve
              </button>
           </form>
 
           <form action="{reject_url}" method="GET" style="display:inline;margin-left:12px">
-             <input type="hidden" name="token"  value="{token}">
-             <input type="hidden" name="status" value="rejected">
              <input type="hidden" name="comment" id="c2">
              <button type="submit"
                      style="background:#d9534f;color:#fff;border:none;padding:12px 28px;
@@ -115,11 +131,13 @@ def build_html(project: str, token: str, brand: str) -> str:
           </form>
         </td></tr>
 
+        <!-- Tiny script to propagate the comment box into both hidden fields -->
         <script>
-          // mirror single text box into hidden inputs so either button carries the value
           const box = document.getElementById('c');
           ['c1','c2'].forEach(id =>
-            box.addEventListener('input', ()=>{document.getElementById(id).value = box.value}));
+            box.addEventListener('input', () => {{
+              document.getElementById(id).value = box.value;
+          }}));
         </script>
 
         <tr><td style="padding:18px 24px;font-size:12px;color:#888;border-top:1px solid #444">

@@ -662,7 +662,7 @@ def add_top_header_table(doc, main_title, logo_path=None):
 
 def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, shade_color=None):
     """
-    2x2 => (FECHA DEL ACTA, PROYECTO) / (NO. PROYECTO, LÍDER DEL PROYECTO)
+    2x2 => (FECHA DEL ACTA, PROYECTO) / (NO. PROYECTO, PROJECT MANAGER)
     """
     table = doc.add_table(rows=2, cols=2)
     table.style = "Table Grid"
@@ -695,9 +695,9 @@ def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, 
     if shade_color:
         shade_cell(c_1_0, shade_color)
 
-    # row1 col1 => LÍDER DEL PROYECTO
+    # row1 col1 => PROJECT MANAGER
     c_1_1 = table.cell(1,1)
-    r_1_1 = c_1_1.paragraphs[0].add_run(f"LÍDER DEL PROYECTO  {leader_name}")
+    r_1_1 = c_1_1.paragraphs[0].add_run(f"PROJECT MANAGER  {leader_name}")
     r_1_1.font.size = Pt(12)
     r_1_1.bold = True
     if shade_color:

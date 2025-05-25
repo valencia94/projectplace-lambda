@@ -60,57 +60,76 @@ def latest_pdf_key(project_id: str) -> Optional[str]:
                 newest_key, newest_ts = key, obj["LastModified"].timestamp()
     return newest_key
 
-def build_html(project: str, approve: str, reject: str, comment: str | None) -> str:
-    btn = ("display:inline-block;padding:12px 28px;margin:0 6px;border-radius:4px;"
-           "font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#fff;text-decoration:none;")
-    approve_btn = f'<a href="{approve}" style="{btn}background:{BRAND_CLR};">Approve</a>'
-    reject_btn  = f'<a href="{reject}"  style="{btn}background:#d9534f;">Reject</a>'
+def build_html(project: str, token: str, brand: str) -> str:
+    """Return fully-inlined HTML with comment box + Approve / Reject buttons."""
+    approve_url = f"{API_BASE}?token={token}&status=approved"
+    reject_url  = f"{API_BASE}?token={token}&status=rejected"
 
-    comment_html = (f'''
-      <tr><td style="padding-top:22px">
-        <div style="border:1px solid #e0e0e0;border-left:4px solid {BRAND_CLR};
-                    background:#222;color:#f1f1f1;padding:14px;font-size:14px;">
-          <strong>Last comment</strong><br>{comment}
-        </div>
-      </td></tr>''' if comment else "")
-
-    return f"""\
+    return f"""
 <!DOCTYPE html>
 <html>
   <body style="margin:0;padding:0;background:#f5f5f5">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-      <tr><td align="center" style="padding:28px 0">
-        <table role="presentation" width="600" cellpadding="0" cellspacing="0"
-               style="border:1px solid #ddd;border-radius:6px;background:#000">
-          <tr><td style="background:{BRAND_CLR};padding:24px;
-                         font-family:Arial,Helvetica,sans-serif;font-size:22px;
-                         color:#fff;border-top-left-radius:6px;border-top-right-radius:6px">
-              Project Acta ready for review
-          </td></tr>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr><td align="center" style="padding:28px 0">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0"
+             style="border:1px solid #ddd;border-radius:6px;background:#000;color:#f1f1f1;
+                    font-family:Arial,Helvetica,sans-serif">
+        <tr><td style="background:{brand};padding:24px;font-size:22px">
+            Project Acta ready for review
+        </td></tr>
 
-          <tr><td style="padding:24px;font-family:Arial,Helvetica,sans-serif;
-                         font-size:15px;line-height:22px;color:#f1f1f1">
-              Hi there,<br><br>
-              Please review the attached Acta for<br>
-              <strong>{project}</strong> and choose an option:
-          </td></tr>
+        <tr><td style="padding:24px;font-size:15px;line-height:22px">
+            Please review the attached Acta for <b>{project}</b> and choose an option.
+        </td></tr>
 
-          <tr><td align="center" style="padding:12px 0 24px 0">
-              {approve_btn}{reject_btn}
-          </td></tr>
+        <!-- Comment box -->
+        <tr><td style="padding:0 24px 18px 24px">
+          <label for="c" style="font-size:14px">Optional comment:</label><br>
+          <input id="c" name="c" type="text" maxlength="240"
+                 style="width:100%;padding:8px;border-radius:4px;border:1px solid #888;"
+                 placeholder="Tell us why you approved or rejected…">
+        </td></tr>
 
-          {comment_html}
+        <!-- Approve / Reject buttons in an HTML form -->
+        <tr><td align="center" style="padding-bottom:32px">
+          <form action="{approve_url}" method="GET" style="display:inline">
+             <input type="hidden" name="token"  value="{token}">
+             <input type="hidden" name="status" value="approved">
+             <input type="hidden" name="comment" id="c1">
+             <button type="submit"
+                     style="background:{brand};color:#fff;border:none;padding:12px 28px;
+                            border-radius:4px;font-size:16px;cursor:pointer">
+               Approve
+             </button>
+          </form>
 
-          <tr><td style="padding:24px;font-family:Arial,Helvetica,sans-serif;
-                         font-size:12px;color:#888;border-top:1px solid #444">
-              CVDex Tech Solutions — empowering excellence through automation
-          </td></tr>
-        </table>
-      </td></tr>
-    </table>
+          <form action="{reject_url}" method="GET" style="display:inline;margin-left:12px">
+             <input type="hidden" name="token"  value="{token}">
+             <input type="hidden" name="status" value="rejected">
+             <input type="hidden" name="comment" id="c2">
+             <button type="submit"
+                     style="background:#d9534f;color:#fff;border:none;padding:12px 28px;
+                            border-radius:4px;font-size:16px;cursor:pointer">
+               Reject
+             </button>
+          </form>
+        </td></tr>
+
+        <script>
+          // mirror single text box into hidden inputs so either button carries the value
+          const box = document.getElementById('c');
+          ['c1','c2'].forEach(id =>
+            box.addEventListener('input', ()=>{document.getElementById(id).value = box.value}));
+        </script>
+
+        <tr><td style="padding:18px 24px;font-size:12px;color:#888;border-top:1px solid #444">
+            CVDex Tech Solutions — empowering excellence through automation
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
   </body>
 </html>"""
-
 
 # ── Lambda handler ─────────────────────────────────────────────────
 def lambda_handler(event: Dict[str, Any], _ctx):

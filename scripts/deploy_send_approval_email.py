@@ -8,9 +8,10 @@ deploy_send_approval_email.py
 """
 
 import os, sys, zipfile, shutil, boto3
+from typing import Any, Dict, Optional  # new
 
 # ── helpers ─────────────────────────────────────────────────
-def require_env(key: str, fallback: str | None = None) -> str:
+def require_env(key: str, fallback: Optional[str] = None) -> str:  # ✅ 3.6+ safe
     """Exit with an error if the required env-var is missing/empty."""
     val = os.getenv(key, fallback)
     if val is None or val.strip() == "":

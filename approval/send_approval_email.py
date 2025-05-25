@@ -20,7 +20,7 @@ from email.message import EmailMessage
 from datetime import datetime
 
 # ── helpers ─────────────────────────────────────────────────────────
-VALID_NAME = re.compile(r"^[a-zA-Z0-9_.\\-]+$")
+VALID_NAME = re.compile(r"^[a-zA-Z0-9_.\-]+$")
 
 def env(key: str, required: bool = True) -> str | None:
     val = os.getenv(key, "").strip()
@@ -198,6 +198,7 @@ def lambda_handler(event: Dict[str, Any], _ctx):
     msg["From"]    = EMAIL_SOURCE
     msg["To"]      = recipient
     msg.set_content("Please view this e-mail in HTML.")
+
     msg.add_alternative(
         build_html(project_id, approve_url, reject_url, last_comment),
         subtype="html"
@@ -206,9 +207,11 @@ def lambda_handler(event: Dict[str, Any], _ctx):
                        filename=os.path.basename(pdf_key))
 
     try:
-        ses.send_raw_email(Source=EMAIL_SOURCE,
-                           Destinations=[recipient],
-                           RawMessage={"Data": msg.as_bytes()})
+        ses.send_raw_email(
+            Source=EMAIL_SOURCE,
+            Destinations=[recipient],
+            RawMessage={"Data": msg.as_bytes()}
+        )
     except ClientError as e:
         return {"statusCode": 500,
                 "body": f"SES send failed: {e.response['Error']['Message']}"}

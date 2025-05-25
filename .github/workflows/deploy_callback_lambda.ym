@@ -1,0 +1,43 @@
+name: Deploy Callback Lambda + API Flush
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-2
+      FUNCTION_NAME: handleApprovalCallback   # ✅ updated name
+      API_ID: 4r0pt34gx4
+      STAGE_NAME: prod
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v3
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Zip Lambda code
+      run: |
+        cd approval
+        zip -r ../callback_lambda.zip handle_approval_callback.py
+
+    - name: Update Lambda function code
+      run: |
+        aws lambda update-function-code \
+          --function-name ${{ env.FUNCTION_NAME }} \
+          --zip-file fileb://callback_lambda.zip
+
+    - name: Flush API Gateway cache (force stage redeploy)
+      run: |
+        aws apigateway create-deployment \
+          --rest-api-id ${{ env.API_ID }} \
+          --stage-name ${{ env.STAGE_NAME }} \
+          --description "Flush cache after callback Lambda update"
+

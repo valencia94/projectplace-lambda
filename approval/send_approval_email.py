@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-send_approval_email.py – v1.7.3  (2025-05-24)
+send_approval_email.py – v1.7.4  (2025-05-24)
 
 • Generates a UUID-4 approval_token, persists status=pending
 • Looks up *Client_Email* card for recipient + latest comment
 • Auto-discovers the newest Acta PDF in S3 (actas/…_<project>.pdf)
-• Sends branded HTML mail via SES with Approve / Reject links
+• Sends branded HTML mail via SES with Approve / Reject links + comment box
 """
 
 from __future__ import annotations
@@ -20,10 +20,9 @@ from email.message import EmailMessage
 from datetime import datetime
 
 # ── helpers ─────────────────────────────────────────────────────────
-VALID_NAME = re.compile(r"^[a-zA-Z0-9_.\-]+$")
+VALID_NAME = re.compile(r"^[a-zA-Z0-9_.\\-]+$")
 
 def env(key: str, required: bool = True) -> str | None:
-    """Read env-var, strip whitespace, die early if missing/invalid."""
     val = os.getenv(key, "").strip()
     if required and not val:
         raise SystemExit(f"❌ Missing env var: {key}")
@@ -49,7 +48,6 @@ ddb = boto3.resource("dynamodb", region_name=REGION).Table(TABLE_NAME)
 
 # ── util ------------------------------------------------------------
 def latest_pdf_key(project_id: str) -> Optional[str]:
-    """Return newest *.pdf under actas/ whose name ends with _<project_id>.pdf"""
     paginator = s3.get_paginator("list_objects_v2")
     newest_key, newest_ts = None, 0
     for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix="actas/"):
@@ -60,18 +58,12 @@ def latest_pdf_key(project_id: str) -> Optional[str]:
                 newest_key, newest_ts = key, obj["LastModified"].timestamp()
     return newest_key
 
-# ── HTML builder ───────────────────────────────────────────────────
+# ── HTML builder (single version) ───────────────────────────────────
 def build_html(project: str,
                approve_url: str,
                reject_url: str,
                preview: Optional[str]) -> str:
-    """
-    Render the e-mail body.
-      • approve_url / reject_url already contain token & status
-      • preview is an optional last-comment excerpt
-    """
-    BRAND = BRAND_CLR  # defined near your other constants
-
+    BRAND = BRAND_CLR
     preview_block = f"""
       <tr><td style="padding-top:22px">
         <div style="border:1px solid #e0e0e0;border-left:4px solid {BRAND};
@@ -145,7 +137,7 @@ def build_html(project: str,
 
 # ── Lambda handler ─────────────────────────────────────────────────
 def lambda_handler(event: Dict[str, Any], _ctx):
-    # ── 1. Parse request ───────────────────────────────────────────
+    # 1. Parse payload
     try:
         payload = json.loads(event["body"]) if isinstance(event.get("body"), str) else event
         project_id = payload["project_id"]
@@ -153,7 +145,7 @@ def lambda_handler(event: Dict[str, Any], _ctx):
     except Exception as e:
         return {"statusCode": 400, "body": f"Missing / malformed body: {e}"}
 
-    # ── 2. Query the project’s latest rows ─────────────────────────
+    # 2. Query DynamoDB
     resp  = ddb.query(KeyConditionExpression=Key("project_id").eq(project_id),
                       ScanIndexForward=False, Limit=25)
     items = resp.get("Items", [])
@@ -163,7 +155,6 @@ def lambda_handler(event: Dict[str, Any], _ctx):
     client_rows = [i for i in items if i.get("title") == "Client_Email"]
     card_row    = client_rows[0] if client_rows else items[0]
 
-    # comment preview
     comment_raw = card_row.get("comments", [])
     if isinstance(comment_raw, list) and comment_raw:
         first = comment_raw[0]
@@ -173,7 +164,7 @@ def lambda_handler(event: Dict[str, Any], _ctx):
     else:
         last_comment = None
 
-    # ── 3. Locate PDF ──────────────────────────────────────────────
+    # 3. Locate PDF
     pdf_key = card_row.get("s3_pdf_path") or latest_pdf_key(project_id)
     if not pdf_key:
         return {"statusCode": 500, "body": "Could not locate Acta PDF"}
@@ -184,61 +175,42 @@ def lambda_handler(event: Dict[str, Any], _ctx):
         return {"statusCode": 500,
                 "body": f"S3 fetch failed: {e.response['Error']['Message']}"}
 
-    mime_type = (mimetypes.guess_type(pdf_key)[0] or "application/pdf").split("/")
-    maintype, subtype = mime_type[0], mime_type[1]
+    maintype, subtype = (mimetypes.guess_type(pdf_key)[0] or "application/pdf").split("/")
 
-    # ── 4. Persist approval token ─────────────────────────────────
-    token = str(uuid.uuid4())
+    # 4. Persist approval token
+    token   = str(uuid.uuid4())
     sent_ts = datetime.utcnow().isoformat() + "Z"
-    
     ddb.update_item(
         Key={"project_id": project_id, "card_id": card_row["card_id"]},
-        UpdateExpression=(
-            "SET approval_token = :t, "
-            "approval_status = :s, "
-            "sent_timestamp = :ts, "
-            "approval_sent_timestamp = :ts"
-        ),
-        ExpressionAttributeValues={
-            ":t": token,
-            ":s": "pending",
-            ":ts": sent_ts
-        }
+        UpdateExpression=("SET approval_token=:t, approval_status=:s, "
+                          "sent_timestamp=:ts, approval_sent_timestamp=:ts"),
+        ExpressionAttributeValues={":t": token, ":s": "pending", ":ts": sent_ts}
     )
-    
-    # ── 5. Build URLs ─────────────────────────────────────────────
-    q = urllib.parse.quote_plus(token)
+
+    # 5. Build URLs
+    q           = urllib.parse.quote_plus(token)
     approve_url = f"{API_BASE}?token={q}&status=approved"
     reject_url  = f"{API_BASE}?token={q}&status=rejected"
 
-# ── 6. Compose & send email ───────────────────────────────────
-msg = EmailMessage()
-msg["Subject"] = f"Action required – Acta {project_id}"
-msg["From"]    = EMAIL_SOURCE
-msg["To"]      = recipient
-msg.set_content("Please view this e-mail in HTML.")
-
-# build_html now takes (project_id, approve_url, reject_url, last_comment)
-msg.add_alternative(
-    build_html(project_id, approve_url, reject_url, last_comment),
-    subtype="html"
-)
-
-msg.add_attachment(
-    pdf_bytes,
-    maintype=maintype,
-    subtype=subtype,
-    filename=os.path.basename(pdf_key)
-)
-
-try:
-    ses.send_raw_email(
-        Source=EMAIL_SOURCE,
-        Destinations=[recipient],
-        RawMessage={"Data": msg.as_bytes()}
+    # 6. Compose & send email
+    msg = EmailMessage()
+    msg["Subject"] = f"Action required – Acta {project_id}"
+    msg["From"]    = EMAIL_SOURCE
+    msg["To"]      = recipient
+    msg.set_content("Please view this e-mail in HTML.")
+    msg.add_alternative(
+        build_html(project_id, approve_url, reject_url, last_comment),
+        subtype="html"
     )
-except ClientError as e:
-    return {"statusCode": 500,
-            "body": f"SES send failed: {e.response['Error']['Message']}"}
+    msg.add_attachment(pdf_bytes, maintype=maintype, subtype=subtype,
+                       filename=os.path.basename(pdf_key))
 
-return {"statusCode": 200, "body": "Approval email sent."}
+    try:
+        ses.send_raw_email(Source=EMAIL_SOURCE,
+                           Destinations=[recipient],
+                           RawMessage={"Data": msg.as_bytes()})
+    except ClientError as e:
+        return {"statusCode": 500,
+                "body": f"SES send failed: {e.response['Error']['Message']}"}
+
+    return {"statusCode": 200, "body": "Approval email sent."}

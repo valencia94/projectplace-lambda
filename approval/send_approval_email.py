@@ -64,16 +64,14 @@ def latest_pdf_key(project_id: str) -> Optional[str]:
 def build_html(project: str,
                approve_url: str,
                reject_url: str,
-               preview: str | None) -> str:
+               preview: Optional[str]) -> str:
     """
     Render the e-mail body.
-
-    * `approve_url` / `reject_url` already contain token & status
-    * `preview` is an optional last-comment excerpt from the card
+      • approve_url / reject_url already contain token & status
+      • preview is an optional last-comment excerpt
     """
-    BRAND = BRAND_CLR  # global constant defined earlier
+    BRAND = BRAND_CLR  # defined near your other constants
 
-    # Optional comment preview (e.g. last card comment)
     preview_block = f"""
       <tr><td style="padding-top:22px">
         <div style="border:1px solid #e0e0e0;border-left:4px solid {BRAND};
@@ -99,10 +97,8 @@ def build_html(project: str,
             Please review the attached Acta for <b>{project}</b> and choose an option.
         </td></tr>
 
-        <!-- Optional prior comment preview -->
         {preview_block}
 
-        <!-- Comment box -->
         <tr><td style="padding:0 24px 18px 24px">
           <label for="c" style="font-size:14px">Optional comment:</label><br>
           <input id="c" name="c" type="text" maxlength="240"
@@ -110,7 +106,6 @@ def build_html(project: str,
                  placeholder="Tell us why you approved or rejected…">
         </td></tr>
 
-        <!-- Approve / Reject buttons wrapped in forms -->
         <tr><td align="center" style="padding-bottom:32px">
           <form action="{approve_url}" method="GET" style="display:inline">
              <input type="hidden" name="comment" id="c1">
@@ -131,7 +126,6 @@ def build_html(project: str,
           </form>
         </td></tr>
 
-        <!-- Tiny script to propagate the comment box into both hidden fields -->
         <script>
           const box = document.getElementById('c');
           ['c1','c2'].forEach(id =>
@@ -217,23 +211,34 @@ def lambda_handler(event: Dict[str, Any], _ctx):
     approve_url = f"{API_BASE}?token={q}&status=approved"
     reject_url  = f"{API_BASE}?token={q}&status=rejected"
 
-    # ── 6. Compose & send email ───────────────────────────────────
-    msg = EmailMessage()
-    msg["Subject"] = f"Action required – Acta {project_id}"
-    msg["From"]    = EMAIL_SOURCE
-    msg["To"]      = recipient
-    msg.set_content("Please view this e-mail in HTML.")
-    msg.add_alternative(build_html(project_id, approve_url, reject_url, last_comment),
-                        subtype="html")
-    msg.add_attachment(pdf_bytes, maintype=maintype, subtype=subtype,
-                       filename=os.path.basename(pdf_key))
+# ── 6. Compose & send email ───────────────────────────────────
+msg = EmailMessage()
+msg["Subject"] = f"Action required – Acta {project_id}"
+msg["From"]    = EMAIL_SOURCE
+msg["To"]      = recipient
+msg.set_content("Please view this e-mail in HTML.")
 
-    try:
-        ses.send_raw_email(Source=EMAIL_SOURCE,
-                           Destinations=[recipient],
-                           RawMessage={"Data": msg.as_bytes()})
-    except ClientError as e:
-        return {"statusCode": 500,
-                "body": f"SES send failed: {e.response['Error']['Message']}"}
+# build_html now takes (project_id, approve_url, reject_url, last_comment)
+msg.add_alternative(
+    build_html(project_id, approve_url, reject_url, last_comment),
+    subtype="html"
+)
 
-    return {"statusCode": 200, "body": "Approval email sent."}
+msg.add_attachment(
+    pdf_bytes,
+    maintype=maintype,
+    subtype=subtype,
+    filename=os.path.basename(pdf_key)
+)
+
+try:
+    ses.send_raw_email(
+        Source=EMAIL_SOURCE,
+        Destinations=[recipient],
+        RawMessage={"Data": msg.as_bytes()}
+    )
+except ClientError as e:
+    return {"statusCode": 500,
+            "body": f"SES send failed: {e.response['Error']['Message']}"}
+
+return {"statusCode": 200, "body": "Approval email sent."}

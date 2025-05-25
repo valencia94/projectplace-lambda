@@ -58,12 +58,19 @@ def latest_pdf_key(project_id: str) -> Optional[str]:
                 newest_key, newest_ts = key, obj["LastModified"].timestamp()
     return newest_key
 
-# ── HTML builder (single version) ───────────────────────────────────
+# ── HTML builder (anchor-link version) ─────────────────────────────
 def build_html(project: str,
                approve_url: str,
                reject_url: str,
                preview: Optional[str]) -> str:
+    """
+    • Renders the e-mail body.
+    • `approve_url` / `reject_url` contain the token & status.
+    • We expose those URLs as <a> buttons and let a tiny script append
+      the user’s optional comment to the link when they type.
+    """
     BRAND = BRAND_CLR
+
     preview_block = f"""
       <tr><td style="padding-top:22px">
         <div style="border:1px solid #e0e0e0;border-left:4px solid {BRAND};
@@ -99,31 +106,36 @@ def build_html(project: str,
         </td></tr>
 
         <tr><td align="center" style="padding-bottom:32px">
-          <form action="{approve_url}" method="GET" style="display:inline">
-             <input type="hidden" name="comment" id="c1">
-             <button type="submit"
-                     style="background:{BRAND};color:#fff;border:none;padding:12px 28px;
-                            border-radius:4px;font-size:16px;cursor:pointer">
-               Approve
-             </button>
-          </form>
+          <!-- plain links styled as buttons -->
+          <a id="approveLink" href="{approve_url}"
+             style="background:{BRAND};color:#fff;text-decoration:none;
+                    padding:12px 28px;border-radius:4px;font-size:16px;
+                    display:inline-block">
+             Approve
+          </a>
 
-          <form action="{reject_url}" method="GET" style="display:inline;margin-left:12px">
-             <input type="hidden" name="comment" id="c2">
-             <button type="submit"
-                     style="background:#d9534f;color:#fff;border:none;padding:12px 28px;
-                            border-radius:4px;font-size:16px;cursor:pointer">
-               Reject
-             </button>
-          </form>
+          <a id="rejectLink"  href="{reject_url}"
+             style="background:#d9534f;color:#fff;text-decoration:none;
+                    padding:12px 28px;border-radius:4px;font-size:16px;
+                    display:inline-block;margin-left:12px">
+             Reject
+          </a>
         </td></tr>
 
         <script>
-          const box = document.getElementById('c');
-          ['c1','c2'].forEach(id =>
-            box.addEventListener('input', () => {{
-              document.getElementById(id).value = box.value;
-          }}));
+          /* append &comment=… to each link as the user types */
+          const box         = document.getElementById('c');
+          const approveBase = "{approve_url}";
+          const rejectBase  = "{reject_url}";
+          const approveLink = document.getElementById('approveLink');
+          const rejectLink  = document.getElementById('rejectLink');
+
+          function updateLinks() {{
+            const comment = encodeURIComponent(box.value.trim());
+            approveLink.href = approveBase + (comment ? "&comment=" + comment : "");
+            rejectLink.href  = rejectBase  + (comment ? "&comment=" + comment : "");
+          }}
+          box.addEventListener('input', updateLinks);
         </script>
 
         <tr><td style="padding:18px 24px;font-size:12px;color:#888;border-top:1px solid #444">

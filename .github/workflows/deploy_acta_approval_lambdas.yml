@@ -10,7 +10,7 @@ on:
       - approval/auto_approve_pending.py
       - approval/email_utils.py
       - config/email_map.json
-      - .github/workflows/deploy_approval.yml   # self-update
+      - .github/workflows/deploy_acta_approval_lambdas.yml   # self-update
 
 concurrency:
   group: deploy-acta

@@ -87,18 +87,17 @@ jobs:
         zip -j auto_approve_pending.zip \
           approval/auto_approve_pending.py
 
-    - name: 🚀  Deploy / create autoApprovePending
+    - name: 🚀 Deploy or create autoApprovePending
       run: |
         set -e
         if ! aws lambda get-function --function-name "$FUNC_AUTO" >/dev/null 2>&1; then
           aws lambda create-function \
             --function-name "$FUNC_AUTO" \
-            --zip-file  fileb://auto_approve_pending.zip \
-            --handler   auto_approve_pending.lambda_handler \
-            --runtime   python3.11 \
-            --role      arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/lambda-auto-approve-role \
-            --environment Variables="{\"AWS_REGION\":\"${{ env.AWS_REGION }}\",\"DYNAMODB_ENRICHMENT_TABLE\":\"${{ env.TABLE_NAME }}\"}"
-            }'
+            --zip-file fileb://auto_approve_pending.zip \
+            --handler auto_approve_pending.lambda_handler \
+            --runtime python3.11 \
+            --role arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/lambda-auto-approve-role \
+            --environment "Variables={\"AWS_REGION\":\"${{ env.AWS_REGION }}\",\"DYNAMODB_ENRICHMENT_TABLE\":\"${{ env.TABLE_NAME }}\"}"
         else
           aws lambda update-function-code \
             --function-name "$FUNC_AUTO" \

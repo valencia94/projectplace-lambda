@@ -97,9 +97,7 @@ jobs:
             --handler   auto_approve_pending.lambda_handler \
             --runtime   python3.11 \
             --role      arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/lambda-auto-approve-role \
-            --environment 'Variables={
-              "AWS_REGION":"'"${{ env.AWS_REGION }}"'",
-              "DYNAMODB_ENRICHMENT_TABLE":"'"${{ env.TABLE_NAME }}"'"
+            --environment Variables="{\"AWS_REGION\":\"${{ env.AWS_REGION }}\",\"DYNAMODB_ENRICHMENT_TABLE\":\"${{ env.TABLE_NAME }}\"}"
             }'
         else
           aws lambda update-function-code \

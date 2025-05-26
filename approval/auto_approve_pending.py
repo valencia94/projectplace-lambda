@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Marks every Acta stuck in ‘pending’ for ≥ 5 days as ‘auto-approved’.
+Marks every Acta stuck in ‘pending’ for ≥ 7 days as ‘auto-approved’.
 Triggered daily by EventBridge.
 """
 
@@ -44,7 +44,7 @@ def lambda_handler(event, _ctx):
                 ExpressionAttributeValues={
                     ":s": "auto-approved",
                     ":ts": NOW.isoformat() + "Z",
-                    ":c": "Automatically approved after 5 days"
+                    ":c": "Automatically approved after 7 days"
                 }
             )
             auto_count += 1

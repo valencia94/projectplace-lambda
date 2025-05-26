@@ -37,28 +37,36 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region:            ${{ env.AWS_REGION }}
 
-    # ─────────────── EMAIL LAMBDA ───────────────
-    - name: 📦  Zip sendApprovalEmail
+    # ─────────── AUTO-APPROVE LAMBDA ────────────
+    - name: 📦 Zip autoApprovePending
       run: |
         set -e
-        zip -j send_approval_email.zip \
-          approval/send_approval_email.py \
-          approval/email_utils.py \
-          config/email_map.json
-
-    - name: 🚀  Deploy sendApprovalEmail
+        zip -j auto_approve_pending.zip \
+          approval/auto_approve_pending.py
+    
+    - name: 🚀 Deploy or create autoApprovePending
       run: |
         set -e
-        aws lambda update-function-code \
-          --function-name "$FUNC_EMAIL" \
-          --zip-file fileb://send_approval_email.zip
+        if ! aws lambda get-function --function-name "$FUNC_AUTO" >/dev/null 2>&1; then
+          aws lambda create-function \
+            --function-name "$FUNC_AUTO" \
+            --zip-file fileb://auto_approve_pending.zip \
+            --handler auto_approve_pending.lambda_handler \
+            --runtime python3.11 \
+            --role arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/lambda-auto-approve-role \
+            --environment='{"Variables":{"AWS_REGION":"${{ env.AWS_REGION }}","DYNAMODB_ENRICHMENT_TABLE":"${{ env.TABLE_NAME }}"}}'
+        else
+          aws lambda update-function-code \
+            --function-name "$FUNC_AUTO" \
+            --zip-file fileb://auto_approve_pending.zip
+        fi
         while true; do
-          STATUS=$(aws lambda get-function --function-name "$FUNC_EMAIL" \
+          STATUS=$(aws lambda get-function --function-name "$FUNC_AUTO" \
                      --query 'Configuration.LastUpdateStatus' --output text)
           [ "$STATUS" = "Successful" ] && break
-          echo "🕒 waiting on $FUNC_EMAIL → $STATUS"; sleep 4
+          echo "🕒 waiting on $FUNC_AUTO → $STATUS"; sleep 4
         done
-
+        
     # ───────────── CALLBACK LAMBDA ──────────────
     - name: 📦  Zip handleApprovalCallback
       run: |

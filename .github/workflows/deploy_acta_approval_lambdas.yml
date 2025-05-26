@@ -37,7 +37,7 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region:            ${{ env.AWS_REGION }}
 
-    # ─────────── AUTO-APPROVE LAMBDA ────────────
+    # ─────────── AUTO-APPROVE LAMBDA ───────────
     - name: 📦 Zip autoApprovePending
       run: |
         set -e
@@ -54,7 +54,7 @@ jobs:
             --handler auto_approve_pending.lambda_handler \
             --runtime python3.11 \
             --role arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/lambda-auto-approve-role \
-            --environment='{"Variables":{"AWS_REGION":"${{ env.AWS_REGION }}","DYNAMODB_ENRICHMENT_TABLE":"${{ env.TABLE_NAME }}"}}'
+            --environment='{"Variables":{"REGION":"${{ env.AWS_REGION }}","DYNAMODB_ENRICHMENT_TABLE":"${{ env.TABLE_NAME }}"}}'
         else
           aws lambda update-function-code \
             --function-name "$FUNC_AUTO" \
@@ -66,7 +66,7 @@ jobs:
           [ "$STATUS" = "Successful" ] && break
           echo "🕒 waiting on $FUNC_AUTO → $STATUS"; sleep 4
         done
-        
+
     # ───────────── CALLBACK LAMBDA ──────────────
     - name: 📦  Zip handleApprovalCallback
       run: |

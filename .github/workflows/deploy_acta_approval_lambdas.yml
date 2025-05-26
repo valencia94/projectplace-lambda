@@ -1,0 +1,175 @@
+name: Deploy Acta Approval Lambdas       # clearer title
+
+on:
+  workflow_dispatch:                     # manual “Run workflow” button
+  push:
+    branches: [ main ]
+    paths:
+      - approval/send_approval_email.py
+      - approval/handle_approval_callback.py
+      - approval/auto_approve_pending.py
+      - approval/email_utils.py
+      - config/email_map.json
+      - .github/workflows/deploy_approval.yml   # self-update
+
+concurrency:
+  group: deploy-acta
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION : ${{ secrets.AWS_REGION }}
+      TABLE_NAME : ${{ secrets.DYNAMODB_ENRICHMENT_TABLE }}
+      FUNC_EMAIL : sendApprovalEmail
+      FUNC_CB    : handleApprovalCallback
+      FUNC_AUTO  : autoApprovePending
+
+    steps:
+    - name: 📥  Checkout repo
+      uses: actions/checkout@v4
+
+    - name: 🔑  Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region:            ${{ env.AWS_REGION }}
+
+    # ─────────────── EMAIL LAMBDA ───────────────
+    - name: 📦  Zip sendApprovalEmail
+      run: |
+        set -e
+        zip -j send_approval_email.zip \
+          approval/send_approval_email.py \
+          approval/email_utils.py \
+          config/email_map.json
+
+    - name: 🚀  Deploy sendApprovalEmail
+      run: |
+        set -e
+        aws lambda update-function-code \
+          --function-name "$FUNC_EMAIL" \
+          --zip-file fileb://send_approval_email.zip
+        while true; do
+          STATUS=$(aws lambda get-function --function-name "$FUNC_EMAIL" \
+                     --query 'Configuration.LastUpdateStatus' --output text)
+          [ "$STATUS" = "Successful" ] && break
+          echo "🕒 waiting on $FUNC_EMAIL → $STATUS"; sleep 4
+        done
+
+    # ───────────── CALLBACK LAMBDA ──────────────
+    - name: 📦  Zip handleApprovalCallback
+      run: |
+        set -e
+        zip -j handle_approval_callback.zip \
+          approval/handle_approval_callback.py \
+          approval/email_utils.py
+
+    - name: 🚀  Deploy handleApprovalCallback
+      run: |
+        set -e
+        aws lambda update-function-code \
+          --function-name "$FUNC_CB" \
+          --zip-file fileb://handle_approval_callback.zip
+        while true; do
+          STATUS=$(aws lambda get-function --function-name "$FUNC_CB" \
+                     --query 'Configuration.LastUpdateStatus' --output text)
+          [ "$STATUS" = "Successful" ] && break
+          echo "🕒 waiting on $FUNC_CB → $STATUS"; sleep 4
+        done
+
+    # ─────────── AUTO-APPROVE LAMBDA ────────────
+    - name: 📦  Zip autoApprovePending
+      run: |
+        set -e
+        zip -j auto_approve_pending.zip \
+          approval/auto_approve_pending.py
+
+    - name: 🚀  Deploy / create autoApprovePending
+      run: |
+        set -e
+        if ! aws lambda get-function --function-name "$FUNC_AUTO" >/dev/null 2>&1; then
+          aws lambda create-function \
+            --function-name "$FUNC_AUTO" \
+            --zip-file  fileb://auto_approve_pending.zip \
+            --handler   auto_approve_pending.lambda_handler \
+            --runtime   python3.11 \
+            --role      arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/lambda-auto-approve-role \
+            --environment 'Variables={
+              "AWS_REGION":"'"${{ env.AWS_REGION }}"'",
+              "DYNAMODB_ENRICHMENT_TABLE":"'"${{ env.TABLE_NAME }}"'"
+            }'
+        else
+          aws lambda update-function-code \
+            --function-name "$FUNC_AUTO" \
+            --zip-file fileb://auto_approve_pending.zip
+        fi
+        while true; do
+          STATUS=$(aws lambda get-function --function-name "$FUNC_AUTO" \
+                     --query 'Configuration.LastUpdateStatus' --output text)
+          [ "$STATUS" = "Successful" ] && break
+          echo "🕒 waiting on $FUNC_AUTO → $STATUS"; sleep 4
+        done
+
+    # ──────── EventBridge rule (rate 1 day) ─────
+    - name: 📅  Ensure EventBridge schedule
+      run: |
+        set -e
+        RULE="auto-approve-pending-every-day"
+        LAMBDA_ARN=$(aws lambda get-function --function-name "$FUNC_AUTO" \
+                       --query 'Configuration.FunctionArn' --output text)
+        aws events put-rule \
+          --name "$RULE" \
+          --schedule-expression 'rate(1 day)' \
+          --state ENABLED
+        aws events put-targets \
+          --rule "$RULE" \
+          --targets "[{\"Id\":\"autoApproveTarget\",\"Arn\":\"$LAMBDA_ARN\"}]"
+        aws lambda add-permission \
+          --function-name "$FUNC_AUTO" \
+          --statement-id events-invoke \
+          --action 'lambda:InvokeFunction' \
+          --principal events.amazonaws.com \
+          --source-arn "arn:aws:events:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:rule/$RULE" \
+          || true   # already exists = OK
+
+    # ─────────── DynamoDB GSI (idempotent) ───────
+    - name: 🛡️  Ensure approval_token-index GSI
+      run: |
+        set -e
+        TABLE="${TABLE_NAME}"
+        GSI="approval_token-index"
+        if aws dynamodb describe-table --table-name "$TABLE" \
+             --query "Table.GlobalSecondaryIndexes[?IndexName=='$GSI']" \
+             --output text | grep -q "$GSI"; then
+          echo "✅ GSI already present"; exit 0
+        fi
+        BILLING=$(aws dynamodb describe-table --table-name "$TABLE" \
+                   --query 'Table.BillingModeSummary.BillingMode' \
+                   --output text 2>/dev/null || true)
+        echo "⚙️  Creating GSI $GSI on $TABLE …"
+        if [ "$BILLING" = "PROVISIONED" ]; then
+          UPDATE='[{"Create":{
+            "IndexName":"'"$GSI"'",
+            "KeySchema":[
+              {"AttributeName":"approval_token","KeyType":"HASH"},
+              {"AttributeName":"project_id","KeyType":"RANGE"}],
+            "Projection":{"ProjectionType":"ALL"},
+            "ProvisionedThroughput":{"ReadCapacityUnits":1,"WriteCapacityUnits":1}
+          }}]'
+        else
+          UPDATE='[{"Create":{
+            "IndexName":"'"$GSI"'",
+            "KeySchema":[
+              {"AttributeName":"approval_token","KeyType":"HASH"},
+              {"AttributeName":"project_id","KeyType":"RANGE"}],
+            "Projection":{"ProjectionType":"ALL"}
+          }}]'
+        fi
+        aws dynamodb update-table --table-name "$TABLE" \
+          --attribute-definitions \
+            AttributeName=approval_token,AttributeType=S \
+            AttributeName=project_id,AttributeType=S \
+          --global-secondary-index-updates "$UPDATE"

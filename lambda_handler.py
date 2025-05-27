@@ -369,8 +369,7 @@ def build_acta_for_project(pid, project_df):
     set_document_margins_and_orientation(doc)
     add_page_x_of_y_footer(doc)
 
-    add_top_header_table(doc, "ACTA DE SEGUIMIENTO", LOGO_IMAGE_PATH)
-    add_legal_header_table(doc)  # 👈 Adds legal fields as shown in client doc
+    add_unified_visual_header(doc, "ACTA DE SEGUIMIENTO", LOGO_IMAGE_PATH)  # 👈 Adds legal fields as shown in client doc
     doc.add_paragraph()
 
     date_now = datetime.now().strftime("%m/%d/%Y")
@@ -820,3 +819,50 @@ def add_legal_header_table(doc):
                 para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
                 for run in para.runs:
                     run.font.size = Pt(10)
+
+
+def add_unified_visual_header(doc, main_title, logo_path=None):
+    """
+    Combines ACTA title, logo, and legal metadata into a 2-row table placed visually at the top.
+    """
+    table = doc.add_table(rows=2, cols=3)
+    table.style = "Table Grid"
+    table.autofit = False
+
+    table.columns[0].width = Inches(4.0)
+    table.columns[1].width = Inches(3.0)
+    table.columns[2].width = Inches(3.0)
+
+    # First Row
+    cell_0_0 = table.cell(0, 0)
+    para_title = cell_0_0.paragraphs[0]
+    run_title = para_title.add_run(main_title)
+    run_title.bold = True
+    run_title.font.size = Pt(20)
+    run_title.font.name = "Verdana"
+
+    table.cell(0, 1).text = ""
+
+    if logo_path and os.path.exists(logo_path):
+        run_logo = table.cell(0, 2).paragraphs[0].add_run()
+        run_logo.add_picture(logo_path, width=Inches(2.0))
+
+    # Second Row
+    table.cell(1, 0).text = "Revisó: Gerente de Operaciones"
+    table.cell(1, 1).text = "Aprobó: Gestión Documental"
+    cell_1_2 = table.cell(1, 2)
+    para = cell_1_2.paragraphs[0]
+    for text in ["Código: GP-F-004", "Fecha: 13-02-2020", "Versión: 2"]:
+        run = para.add_run(text + "\n")
+        run.font.size = Pt(10)
+        run.font.name = "Verdana"
+
+    for row in table.rows:
+        for cell in row.cells:
+            for para in cell.paragraphs:
+                para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+                for run in para.runs:
+                    run.font.size = Pt(10)
+                    run.font.name = "Verdana"
+
+    doc.add_paragraph()  # spacing below

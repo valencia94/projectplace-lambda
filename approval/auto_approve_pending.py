@@ -6,23 +6,26 @@ Triggered daily by EventBridge.
 
 import os, boto3, datetime
 from boto3.dynamodb.conditions import Key, Attr
+from botocore.exceptions import ClientError          # ← NEW
 
-REGION = os.environ["AWS_REGION"]
+REGION = os.environ["AWS_REGION"]                    # auto-injected by Lambda
 TABLE  = os.environ["DYNAMODB_ENRICHMENT_TABLE"]
 
 ddb = boto3.resource("dynamodb", region_name=REGION).Table(TABLE)
 NOW     = datetime.datetime.utcnow()
-CUTOFF  = NOW - datetime.timedelta(days=5)
+CUTOFF  = NOW - datetime.timedelta(days=7)           # 7-day rule
 
-def _pending_items():
-    # Prefer the GSI if present
+def _pending_items() -> list[dict]:
+    """Query GSI if present, else full scan."""
     try:
         return ddb.query(
             IndexName="approval_status-index",
             KeyConditionExpression=Key("approval_status").eq("pending")
         ).get("Items", [])
-    except ddb.meta.client.exceptions.ValidationException:
-        # no index → full scan (once a day → cheap)
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ValidationException":
+            raise                                              # genuine failure
+        # GSI missing → fall back to scan
         return ddb.scan(
             FilterExpression=Attr("approval_status").eq("pending")
         ).get("Items", [])
@@ -49,7 +52,4 @@ def lambda_handler(event, _ctx):
             )
             auto_count += 1
 
-    return {
-        "statusCode": 200,
-        "body": f"{auto_count} records auto-approved"
-    }
+    return {"statusCode": 200, "body": f"{auto_count} records auto-approved"}

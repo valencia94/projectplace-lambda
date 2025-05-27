@@ -369,10 +369,54 @@ def build_acta_for_project(pid, project_df):
     set_document_margins_and_orientation(doc)
     add_page_x_of_y_footer(doc)
 
-    add_top_header_table(doc, "ACTA DE SEGUIMIENTO", LOGO_IMAGE_PATH)
-    add_legal_header_table(doc)  # 👈 Adds legal fields as shown in client doc
-    doc.add_paragraph()
+def add_top_header_table(doc, main_title, logo_path=None):
+    section = doc.sections[0]
+    header = section.header
+    table = header.add_table(rows=2, cols=3)
+    table.style = "Table Grid"
+    table.autofit = False
 
+    # Set column widths
+    table.columns[0].width = Inches(4.0)
+    table.columns[1].width = Inches(3.0)
+    table.columns[2].width = Inches(3.0)
+
+    # Row 0: Title and Logo
+    cell_0_0 = table.cell(0, 0)
+    cell_0_0.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+    para_title = cell_0_0.paragraphs[0]
+    run_title = para_title.add_run(main_title)
+    run_title.bold = True
+    run_title.font.size = Pt(20)
+    run_title.font.name = "Verdana"
+
+    table.cell(0, 1).text = ""
+
+    if logo_path and os.path.exists(logo_path):
+        run_logo = table.cell(0, 2).paragraphs[0].add_run()
+        run_logo.add_picture(logo_path, width=Inches(2.0))
+
+    # Row 1: Legal Metadata
+    table.cell(1, 0).text = "Revisó: Gerente de Operaciones"
+    table.cell(1, 1).text = "Aprobó: Gestión Documental"
+    cell_1_2 = table.cell(1, 2)
+    para = cell_1_2.paragraphs[0]
+    for text in ["Código: GP-F-004", "Fecha: 13-02-2020", "Versión: 2"]:
+        run = para.add_run(text + "\n")
+        run.font.size = Pt(10)
+        run.font.name = "Verdana"
+
+    # Formatting
+    for row in table.rows:
+        for cell in row.cells:
+            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+            for para in cell.paragraphs:
+                para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+                for run in para.runs:
+                    run.font.size = Pt(10)
+                    run.font.name = "Verdana"
+    
+    doc.add_paragraph()
     date_now = datetime.now().strftime("%m/%d/%Y")
     date_text = f"FECHA DEL ACTA: {date_now}"
     add_two_by_two_table(doc, date_text, project_name, str(pid), leader_name, shade_color=LIGHT_SHADE_2X2)
@@ -790,33 +834,3 @@ def shade_cell(cell, color):
     shade_elm.set(qn("w:fill"), color)
     cell._element.get_or_add_tcPr().append(shade_elm)
 
-def add_legal_header_table(doc):
-    """
-    Adds a 2-row, 3-column table with the legal code, version, and approval fields.
-    This will appear directly under the logo/title table.
-    """
-    table = doc.add_table(rows=2, cols=3)
-    table.style = "Table Grid"
-    table.autofit = False
-    table.columns[0].width = Inches(3.33)
-    table.columns[1].width = Inches(3.33)
-    table.columns[2].width = Inches(3.33)
-
-    # Row 0 values
-    row0 = table.rows[0].cells
-    row0[0].paragraphs[0].add_run("Revisó: Gerente de Operaciones").font.name = "Verdana"
-    row0[1].paragraphs[0].add_run("Aprobó: Gestión Documental").font.name = "Verdana"
-    row0[2].paragraphs[0].add_run("Código: GP-F-004").font.name = "Verdana"
-
-    # Row 1 values
-    row1 = table.rows[1].cells
-    row1[0].paragraphs[0].add_run("").font.name = "Verdana"  # Empty
-    row1[1].paragraphs[0].add_run("").font.name = "Verdana"  # Empty
-    row1[2].paragraphs[0].add_run("Fecha: 13-02-2020\nVersión: 2").font.name = "Verdana"
-
-    for row in table.rows:
-        for cell in row.cells:
-            for para in cell.paragraphs:
-                para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                for run in para.runs:
-                    run.font.size = Pt(10)

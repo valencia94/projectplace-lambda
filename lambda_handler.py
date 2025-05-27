@@ -644,7 +644,7 @@ def add_top_header_table(doc, main_title, logo_path=None):
     p_left = left_cell.paragraphs[0]
     run_left = p_left.add_run(main_title)
     run_left.bold = True
-    run_left.font.size = Pt(24)
+    run_left.font.size = Pt(30)
     run_left.font.name = "Verdana"
 
     right_cell = table.cell(0,1)
@@ -820,9 +820,6 @@ def add_legal_header_table(doc):
                 for run in para.runs:
                     run.font.size = Pt(10)
 
-
-
-
 def add_unified_visual_header(doc, main_title, logo_path=None):
     """
     Refined 2-row, 3-column header:
@@ -849,7 +846,7 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
     para_title.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     run_title = para_title.add_run(main_title)
     run_title.bold = True
-    run_title.font.size = Pt(20)
+    run_title.font.size = Pt(30)
     run_title.font.name = "Verdana"
 
     table.cell(0, 2).text = "Código: GP-F-004"

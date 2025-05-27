@@ -821,44 +821,52 @@ def add_legal_header_table(doc):
                     run.font.size = Pt(10)
 
 
+
+
 def add_unified_visual_header(doc, main_title, logo_path=None):
     """
-    Combines ACTA title, logo, and legal metadata into a 2-row table placed visually at the top.
+    Refined 2-row, 3-column header:
+    Row 1: Logo | ACTA title (centered) | Código
+    Row 2: Revisó | Aprobó | Fecha + Versión
     """
     table = doc.add_table(rows=2, cols=3)
     table.style = "Table Grid"
     table.autofit = False
 
-    table.columns[0].width = Inches(4.0)
-    table.columns[1].width = Inches(3.0)
-    table.columns[2].width = Inches(3.0)
+    table.columns[0].width = Inches(3.3)
+    table.columns[1].width = Inches(4.2)
+    table.columns[2].width = Inches(2.5)
 
-    # First Row
-    cell_0_0 = table.cell(0, 0)
-    para_title = cell_0_0.paragraphs[0]
+    # Row 1
+    if logo_path and os.path.exists(logo_path):
+        run_logo = table.cell(0, 0).paragraphs[0].add_run()
+        run_logo.add_picture(logo_path, width=Inches(3.0))
+    else:
+        table.cell(0, 0).text = "LOGO"
+
+    cell_title = table.cell(0, 1)
+    para_title = cell_title.paragraphs[0]
+    para_title.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     run_title = para_title.add_run(main_title)
     run_title.bold = True
     run_title.font.size = Pt(20)
     run_title.font.name = "Verdana"
 
-    table.cell(0, 1).text = ""
+    table.cell(0, 2).text = "Código: GP-F-004"
 
-    if logo_path and os.path.exists(logo_path):
-        run_logo = table.cell(0, 2).paragraphs[0].add_run()
-        run_logo.add_picture(logo_path, width=Inches(2.0))
-
-    # Second Row
+    # Row 2
     table.cell(1, 0).text = "Revisó: Gerente de Operaciones"
     table.cell(1, 1).text = "Aprobó: Gestión Documental"
-    cell_1_2 = table.cell(1, 2)
-    para = cell_1_2.paragraphs[0]
-    for text in ["Código: GP-F-004", "Fecha: 13-02-2020", "Versión: 2"]:
-        run = para.add_run(text + "\n")
-        run.font.size = Pt(10)
-        run.font.name = "Verdana"
+    cell = table.cell(1, 2)
+    para = cell.paragraphs[0]
+    run = para.add_run("Fecha: 13-02-2020\nVersión: 2")
+    run.font.size = Pt(10)
+    run.font.name = "Verdana"
 
+    # Format all cells
     for row in table.rows:
         for cell in row.cells:
+            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
             for para in cell.paragraphs:
                 para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
                 for run in para.runs:

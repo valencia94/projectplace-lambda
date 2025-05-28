@@ -161,7 +161,6 @@ def get_robot_access_token(client_id, client_secret):
         logger.error(f"Token fetch error: {str(e)}")
         return None
 
-
 # ----------------------------------------------------------------------------
 # 2) ENTERPRISE PROJECTS
 # ----------------------------------------------------------------------------
@@ -203,7 +202,6 @@ def get_all_account_projects(token, include_archived=False):
     except requests.exceptions.RequestException as e:
         logger.error(f"Error listing enterprise projects: {e}")
         return []
-
 
 # ----------------------------------------------------------------------------
 # 3) EXCEL GENERATION
@@ -267,7 +265,6 @@ def fetch_comments_for_card(token, card_id):
     except Exception as e:
         logger.error(f"Failed to fetch comments for card {card_id}: {str(e)}")
     return out
-
 
 # ----------------------------------------------------------------------------
 # 4) DYNAMO
@@ -801,7 +798,7 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
     table.autofit = False
 
     table.columns[0].width = Inches(2.5)  # Logo
-    table.columns[1].width = Inches(3.5)  # Title
+    table.columns[1].width = Inches(2.5)  # Title
     table.columns[2].width = Inches(2.0)  # Spacer
     table.columns[3].width = Inches(2.0)  # Code block
 

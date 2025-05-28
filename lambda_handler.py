@@ -789,37 +789,6 @@ def shade_cell(cell, color):
     shade_elm.set(qn("w:fill"), color)
     cell._element.get_or_add_tcPr().append(shade_elm)
 
-def add_legal_header_table(doc):
-    """
-    Adds a 2-row, 3-column table with the legal code, version, and approval fields.
-    This will appear directly under the logo/title table.
-    """
-    table = doc.add_table(rows=2, cols=3)
-    table.style = "Table Grid"
-    table.autofit = False
-    table.columns[0].width = Inches(3.33)
-    table.columns[1].width = Inches(3.33)
-    table.columns[2].width = Inches(3.33)
-
-    # Row 0 values
-    row0 = table.rows[0].cells
-    row0[0].paragraphs[0].add_run("Revisó: Gerente de Operaciones").font.name = "Verdana"
-    row0[1].paragraphs[0].add_run("Aprobó: Gestión Documental").font.name = "Verdana"
-    row0[2].paragraphs[0].add_run("Código: GP-F-004").font.name = "Verdana"
-
-    # Row 1 values
-    row1 = table.rows[1].cells
-    row1[0].paragraphs[0].add_run("").font.name = "Verdana"  # Empty
-    row1[1].paragraphs[0].add_run("").font.name = "Verdana"  # Empty
-    row1[2].paragraphs[0].add_run("Fecha: 13-02-2020\nVersión: 2").font.name = "Verdana"
-
-    for row in table.rows:
-        for cell in row.cells:
-            for para in cell.paragraphs:
-                para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                for run in para.runs:
-                    run.font.size = Pt(10)
-
 def add_unified_visual_header(doc, main_title, logo_path=None):
     """
     Final design per visual spec:
@@ -832,7 +801,7 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
     table.autofit = False
 
     table.columns[0].width = Inches(2.5)  # Logo
-    table.columns[1].width = Inches(4.5)  # Title
+    table.columns[1].width = Inches(3.5)  # Title
     table.columns[2].width = Inches(2.0)  # Spacer
     table.columns[3].width = Inches(2.0)  # Code block
 

@@ -822,45 +822,49 @@ def add_legal_header_table(doc):
 
 def add_unified_visual_header(doc, main_title, logo_path=None):
     """
-    Refined 2-row, 3-column header:
-    Row 1: Logo | ACTA title (centered) | Código
-    Row 2: Revisó | Aprobó | Fecha + Versión
+    Final design per visual spec:
+    - Merge cell(0,0) + cell(1,0) for the logo (vertical span)
+    - Merge cell(0,1) + cell(0,2) for centered title
+    - Row 2: metadata fields left-to-right
     """
-    table = doc.add_table(rows=2, cols=3)
+    table = doc.add_table(rows=2, cols=4)
     table.style = "Table Grid"
     table.autofit = False
 
-    table.columns[0].width = Inches(3.3)
-    table.columns[1].width = Inches(4.2)
-    table.columns[2].width = Inches(2.5)
+    table.columns[0].width = Inches(2.5)  # Logo
+    table.columns[1].width = Inches(4.5)  # Title
+    table.columns[2].width = Inches(2.0)  # Spacer
+    table.columns[3].width = Inches(2.0)  # Code block
 
-    # Row 1
+    # Merge for logo vertical (row 0 & 1 col 0)
+    logo_cell = table.cell(0, 0).merge(table.cell(1, 0))
     if logo_path and os.path.exists(logo_path):
-        run_logo = table.cell(0, 0).paragraphs[0].add_run()
-        run_logo.add_picture(logo_path, width=Inches(3.0))
+        run_logo = logo_cell.paragraphs[0].add_run()
+        run_logo.add_picture(logo_path, width=Inches(2.0))
     else:
-        table.cell(0, 0).text = "LOGO"
+        logo_cell.text = "LOGO"
 
-    cell_title = table.cell(0, 1)
-    para_title = cell_title.paragraphs[0]
+    # Merge for ACTA title (row 0 col 1+2)
+    title_cell = table.cell(0, 1).merge(table.cell(0, 2))
+    para_title = title_cell.paragraphs[0]
     para_title.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     run_title = para_title.add_run(main_title)
     run_title.bold = True
-    run_title.font.size = Pt(30)
+    run_title.font.size = Pt(20)
     run_title.font.name = "Verdana"
 
-    table.cell(0, 2).text = "Código: GP-F-004"
+    # Código and Fecha cell (row 0 col 3)
+    code_para = table.cell(0, 3).paragraphs[0]
+    run_code = code_para.add_run("Código: GP-F-004\nFecha: 13-02-2020")
+    run_code.font.size = Pt(10)
+    run_code.font.name = "Verdana"
 
-    # Row 2
-    table.cell(1, 0).text = "Revisó: Gerente de Operaciones"
-    table.cell(1, 1).text = "Aprobó: Gestión Documental"
-    cell = table.cell(1, 2)
-    para = cell.paragraphs[0]
-    run = para.add_run("Fecha: 13-02-2020\nVersión: 2")
-    run.font.size = Pt(10)
-    run.font.name = "Verdana"
+    # Row 2 metadata
+    table.cell(1, 1).text = "Revisó: Gerente de Operaciones"
+    table.cell(1, 2).text = "Aprobó: Gestión Documental"
+    table.cell(1, 3).text = "Versión: 2"
 
-    # Format all cells
+    # Apply formatting
     for row in table.rows:
         for cell in row.cells:
             cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
@@ -870,4 +874,4 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
                     run.font.size = Pt(10)
                     run.font.name = "Verdana"
 
-    doc.add_paragraph()  # spacing below
+    doc.add_paragraph()

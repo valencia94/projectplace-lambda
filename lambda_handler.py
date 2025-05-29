@@ -430,7 +430,7 @@ def add_project_status_table(doc, df):
         hdr_cells[i].text = hdr_text
         run = hdr_cells[i].paragraphs[0].runs[0]
         run.bold = True
-        run.font.size = Pt(12)
+        run.font.size = Pt(20)
         run.font.name = "Verdana"
         run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
 

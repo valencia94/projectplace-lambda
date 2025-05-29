@@ -800,7 +800,7 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
     table.columns[0].width = Inches(2.5)  # Logo
     table.columns[1].width = Inches(2.5)  # Title
     table.columns[2].width = Inches(2.0)  # Spacer
-    table.columns[3].width = Inches(2.0)  # Code block
+    table.columns[3].width = Inches(3.0)  # Code block
 
     # Merge for logo vertical (row 0 & 1 col 0)
     logo_cell = table.cell(0, 0).merge(table.cell(1, 0))

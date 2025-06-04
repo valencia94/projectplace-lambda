@@ -279,9 +279,10 @@ def store_in_dynamodb(df):
             continue
         item = {
             "project_id": str(pid),
-            "card_id": str(row.get("id","N/A")),
-            "title": str(row.get("title","N/A")),
-            "timestamp": int(time.time())
+            "card_id":    str(row.get("id", "N/A")),
+            "title":      str(row.get("title", "N/A")),
+            "due_date":   str(row.get("due_date", "")),  # NEW
+            "timestamp":  int(time.time())
         }
         table.put_item(Item=item)
         inserted += 1
@@ -446,16 +447,13 @@ def add_project_status_table(doc, df):
             run.font.name = "Verdana"
 
 def add_commitments_table(doc, df):
-    commits = df[(df.get("board_name","") == "COMPROMISOS") & (df["column_id"] == 1)]
-
-
-
-
-
-
-
-
-
+    """
+    Build COMPROMISOS:
+      • only cards where is_compromiso == True
+      • Responsable  ← comments_parsed
+      • Fecha        ← due_date (pretty-print)
+    """
+    commits = df[df["is_compromiso"] & (df["column_id"] == 1)]
     if commits.empty:
         doc.add_paragraph("No commitments recorded.")
         return
@@ -463,57 +461,33 @@ def add_commitments_table(doc, df):
     table = doc.add_table(rows=1, cols=3)
     table.style = "Table Grid"
     table.autofit = False
-
-    hdr_row = table.rows[0]
-    hdr_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
-    hdr_row.height = Inches(0.45)
-
     table.columns[0].width = Inches(3.0)
     table.columns[1].width = Inches(4.0)
     table.columns[2].width = Inches(3.0)
 
-    col_headers = ["COMPROMISO", "RESPONSABLE", "FECHA"]
-    hdr_cells = hdr_row.cells
-    for i, hdr_text in enumerate(col_headers):
-        hdr_cells[i].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-        hdr_cells[i].text = hdr_text
-        run = hdr_cells[i].paragraphs[0].runs[0]
-        run.bold = True
-        run.font.size = Pt(12)
-        run.font.name = "Verdana"
-        run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
-        shading_elm = OxmlElement("w:shd")
-        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
-        hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
+    hdrs = ["COMPROMISO", "RESPONSABLE", "FECHA"]
+    hdr_cells = table.rows[0].cells
+    for i, h in enumerate(hdrs):
+        hdr_cells[i].text = h
+        r = hdr_cells[i].paragraphs[0].runs[0]
+        r.bold, r.font.size, r.font.name = True, Pt(12), "Verdana"
+        shd = OxmlElement("w:shd"); shd.set(qn("w:fill"), BRAND_COLOR_HEADER)
+        hdr_cells[i]._element.get_or_add_tcPr().append(shd)
 
-    row_idx = 0
     for _, row in commits.iterrows():
-        new_cells = table.add_row().cells
+        compromiso  = str(row["title"])
+        responsable = str(row["comments_parsed"]).strip("[]'\" ")
 
+        fecha_raw = str(row["due_date"])
+        try:
+            fecha = datetime.strptime(fecha_raw[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+        except Exception:
+            fecha = fecha_raw or ""
 
-
-        comp = str(row.get("title",""))
-        responsible = str(row.get("planlet_name",""))
-        last_comment = str(row.get("comments_parsed",""))
-
-
-
-
-
-        date_str = parse_comment_for_date(last_comment)
-        if not date_str.strip():
-            date_str = last_comment.strip("[]'\" ") or "N/A"
-
-
-
-        data_vals = [comp, responsible, date_str]
-        for j, dv in enumerate(data_vals):
-            new_cells[j].text = dv
-            p = new_cells[j].paragraphs[0]
-            p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-            run = p.runs[0]
-            run.font.size = Pt(10)
-            run.font.name = "Verdana"
+        for val, cell in zip([compromiso, responsable, fecha], table.add_row().cells):
+            cell.text = val
+            run = cell.paragraphs[0].runs[0]
+            run.font.size, run.font.name = Pt(10), "Verdana"
 
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")

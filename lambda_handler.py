@@ -114,6 +114,7 @@ def lambda_handler(event, context):
             logger.error(f"❌ build_acta returned None for {pid}")
             continue
         doc_count += 1
+        
         # Upload doc
         first_row = project_df.iloc[0]
         p_name = str(first_row.get("project_name", "UnknownProject"))
@@ -130,7 +131,7 @@ def lambda_handler(event, context):
                 upload_file_to_s3(pdf_path, s3_key_pdf)
         except Exception as exc:
             logger.error(f"PDF conversion failed for doc {doc_path}: {exc}")
-
+            
     # 8) Upload Excel as well
     s3_excel_key = "actas/Acta_de_Seguimiento.xlsx"
     upload_file_to_s3(excel_path, s3_excel_key)

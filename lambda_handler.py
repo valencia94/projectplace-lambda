@@ -85,27 +85,35 @@ def lambda_handler(event, context):
 
     # 4) Build DataFrame from the Excel
     df = pd.read_excel(excel_path)
+    
+    # 🔍  see what came back from Excel
+    logger.info(f"[DEBUG] Excel load → rows={len(df)}, cols={list(df.columns)}")
+    
     if df.empty:
         logger.warning("Excel is empty—no tasks to process.")
         return {"statusCode": 200, "body": "No tasks found in Excel."}
-
+    
     # 5) Store in Dynamo
     store_in_dynamodb(df)
-
+    
     # 6) snippet => filter + parse
     df = snippet_filter(df)
+    logger.info(f"[DEBUG] After snippet_filter → rows={len(df)}")   # <— new breadcrumb
+    
     if df.empty:
         logger.warning("No tasks remain after snippet filter.")
         return {"statusCode": 200, "body": "No tasks remain after snippet filter."}
-
+    
     # 7) Multi-doc creation
     grouped = df.groupby("project_id")
     doc_count = 0
     for pid, project_df in grouped:
-        # doc.save(...) is synchronous
+        logger.info(f"[DEBUG] Build acta pid={pid} rows={len(project_df)}")  # <— new breadcrumb
         doc_path = build_acta_for_project(pid, project_df)
-        if doc_path:
-            doc_count += 1
+        if not doc_path:
+            logger.error(f"❌ build_acta returned None for {pid}")
+            continue
+        doc_count += 1
             # Upload doc
             first_row = project_df.iloc[0]
             p_name = str(first_row.get("project_name", "UnknownProject"))

@@ -114,22 +114,22 @@ def lambda_handler(event, context):
             logger.error(f"❌ build_acta returned None for {pid}")
             continue
         doc_count += 1
-            # Upload doc
-            first_row = project_df.iloc[0]
-            p_name = str(first_row.get("project_name", "UnknownProject"))
-            safe_proj = p_name.replace("/", "_").replace(" ", "_")
-            s3_key_docx = f"actas/Acta_{safe_proj}_{pid}.docx"
-            upload_file_to_s3(doc_path, s3_key_docx)
-        
-            # (OPTIONAL) Convert to PDF and upload
-            try:
-                pdf_path = convert_docx_to_pdf(doc_path)
-                if pdf_path:
-                    # e.g. "actas/Acta_ProjectName_1234.pdf"
-                    s3_key_pdf = f"actas/Acta_{safe_proj}_{pid}.pdf"
-                    upload_file_to_s3(pdf_path, s3_key_pdf)
-            except Exception as exc:
-                logger.error(f"PDF conversion failed for doc {doc_path}: {exc}")
+        # Upload doc
+        first_row = project_df.iloc[0]
+        p_name = str(first_row.get("project_name", "UnknownProject"))
+        safe_proj = p_name.replace("/", "_").replace(" ", "_")
+        s3_key_docx = f"actas/Acta_{safe_proj}_{pid}.docx"
+        upload_file_to_s3(doc_path, s3_key_docx)
+
+        # (OPTIONAL) Convert to PDF and upload
+        try:
+            pdf_path = convert_docx_to_pdf(doc_path)
+            if pdf_path:
+                # e.g. "actas/Acta_ProjectName_1234.pdf"
+                s3_key_pdf = f"actas/Acta_{safe_proj}_{pid}.pdf"
+                upload_file_to_s3(pdf_path, s3_key_pdf)
+        except Exception as exc:
+            logger.error(f"PDF conversion failed for doc {doc_path}: {exc}")
 
     # 8) Upload Excel as well
     s3_excel_key = "actas/Acta_de_Seguimiento.xlsx"

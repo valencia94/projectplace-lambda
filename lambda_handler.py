@@ -448,7 +448,16 @@ def add_project_status_table(doc, df):
             run.font.name = "Verdana"
 
 def add_commitments_table(doc, df):
-    commits = df[(df.get("board_name","") == "COMPROMISOS") & (df["column_id"] == 1)]
+    """
+    Build the COMPROMISOS table using the new tag / due-date logic.
+
+    Entry  ➜ keep rows that have at least one tag (non-empty list / string)
+    Exit   ➜ skip otherwise
+    """
+    # normalise tags column to str so .str.strip works even if NaN
+    df["tags"] = df["tags"].astype(str)
+
+    commits = df[(df["tags"].str.strip() != "[]") & (df["column_id"] == 1)]
     if commits.empty:
         doc.add_paragraph("No commitments recorded.")
         return
@@ -456,49 +465,42 @@ def add_commitments_table(doc, df):
     table = doc.add_table(rows=1, cols=3)
     table.style = "Table Grid"
     table.autofit = False
-
-    hdr_row = table.rows[0]
-    hdr_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
-    hdr_row.height = Inches(0.45)
-
     table.columns[0].width = Inches(3.0)
     table.columns[1].width = Inches(4.0)
     table.columns[2].width = Inches(3.0)
 
-    col_headers = ["COMPROMISO", "RESPONSABLE", "FECHA"]
-    hdr_cells = hdr_row.cells
-    for i, hdr_text in enumerate(col_headers):
-        hdr_cells[i].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-        hdr_cells[i].text = hdr_text
-        run = hdr_cells[i].paragraphs[0].runs[0]
-        run.bold = True
-        run.font.size = Pt(12)
-        run.font.name = "Verdana"
-        run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
-        shading_elm = OxmlElement("w:shd")
-        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
-        hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
+    # header row
+    hdrs = ["COMPROMISO", "RESPONSABLE", "FECHA"]
+    for i, h in enumerate(hdrs):
+        cell = table.rows[0].cells[i]
+        cell.text = h
+        r = cell.paragraphs[0].runs[0]
+        r.bold, r.font.size, r.font.name = True, Pt(12), "Verdana"
+        # brand-colour shading
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:fill"), BRAND_COLOR_HEADER)
+        cell._element.get_or_add_tcPr().append(shd)
 
-    row_idx = 0
+    # rows
     for _, row in commits.iterrows():
-        new_cells = table.add_row().cells
+        compromiso   = str(row.get("title", ""))
+        responsable  = str(row.get("comments_parsed", "")).strip("[]'\"")   # ← as before
+        due_raw      = str(row.get("due_date", "")).strip()
 
-        comp = str(row.get("title",""))
-        responsible = str(row.get("planlet_name",""))
-        last_comment = str(row.get("comments_parsed",""))
+        # Try to format YYYY-MM-DD → DD/MM/YYYY
+        fecha = ""
+        if due_raw not in ("", "None"):
+            try:
+                fecha = datetime.strptime(due_raw[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+            except ValueError:
+                fecha = due_raw   # keep original if parse fails
 
-        date_str = parse_comment_for_date(last_comment)
-        if not date_str.strip():
-            date_str = last_comment.strip("[]'\" ") or "N/A"
+        cells = table.add_row().cells
+        for val, c in zip([compromiso, responsable, fecha], cells):
+            c.text = val
+            run = c.paragraphs[0].runs[0]
+            run.font.size, run.font.name = Pt(10), "Verdana"
 
-        data_vals = [comp, responsible, date_str]
-        for j, dv in enumerate(data_vals):
-            new_cells[j].text = dv
-            p = new_cells[j].paragraphs[0]
-            p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-            run = p.runs[0]
-            run.font.size = Pt(10)
-            run.font.name = "Verdana"
 
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")
@@ -509,8 +511,7 @@ def parse_comment_for_date(comment_text):
         except ValueError:
             pass
     return ""
-
-
+    
 # ----------------------------------------------------------------------------
 # S3 & HELPER FUNCS
 # ----------------------------------------------------------------------------
@@ -833,7 +834,7 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
     # Apply formatting
     for row in table.rows:
         for cell in row.cells:
-            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTERMore actions
+            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
             for para in cell.paragraphs:
                 para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
                 for run in para.runs:

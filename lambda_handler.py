@@ -114,6 +114,8 @@ def lambda_handler(event, context):
             logger.error(f"❌ build_acta returned None for {pid}")
             continue
         doc_count += 1
+        
+        def some_function():
             # Upload doc
             first_row = project_df.iloc[0]
             p_name = str(first_row.get("project_name", "UnknownProject"))

@@ -114,15 +114,13 @@ def lambda_handler(event, context):
             logger.error(f"❌ build_acta returned None for {pid}")
             continue
         doc_count += 1
-        
-        def some_function():
             # Upload doc
             first_row = project_df.iloc[0]
             p_name = str(first_row.get("project_name", "UnknownProject"))
             safe_proj = p_name.replace("/", "_").replace(" ", "_")
             s3_key_docx = f"actas/Acta_{safe_proj}_{pid}.docx"
             upload_file_to_s3(doc_path, s3_key_docx)
-
+        
             # (OPTIONAL) Convert to PDF and upload
             try:
                 pdf_path = convert_docx_to_pdf(doc_path)

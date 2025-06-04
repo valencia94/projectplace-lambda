@@ -1,4 +1,4 @@
-FROM public.ecr.aws/lambda/python:3.10More actions
+FROM public.ecr.aws/lambda/python:3.10 
 
 # 1) Install curl so we can fetch the EPEL .rpm
 RUN yum -y install curl
@@ -13,7 +13,7 @@ RUN rpm -ivh /tmp/epel.rpm || echo "Attempted to install EPEL"
 
 # 4) Try installing LibreOffice in one of these packages.
 #    If 'libreoffice-headless' doesn't exist, we fallback to 'libreoffice'
-#    If that also fails, we fallback to 'libreoffice-core libreoffice-writer'More actions
+#    If that also fails, we fallback to 'libreoffice-core libreoffice-writer'
 RUN yum -y install libreoffice-headless || \
     yum -y install libreoffice || \
     yum -y install libreoffice-core libreoffice-writer || \

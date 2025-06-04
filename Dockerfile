@@ -5,7 +5,7 @@ RUN yum -y install wget tar && \
     yum clean all
 
 # 2) Download LibreOffice official RPM archive and extract
-ENV LIBREOFFICE_VERSION=7.6.7.2
+ENV LIBREOFFICE_VERSION=7.6.7
 RUN wget https://download.documentfoundation.org/libreoffice/stable/${LIBREOFFICE_VERSION}/rpm/x86_64/LibreOffice_${LIBREOFFICE_VERSION}_Linux_x86-64_rpm.tar.gz && \
     tar -xvf LibreOffice_${LIBREOFFICE_VERSION}_Linux_x86-64_rpm.tar.gz && \
     rm LibreOffice_${LIBREOFFICE_VERSION}_Linux_x86-64_rpm.tar.gz

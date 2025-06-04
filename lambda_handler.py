@@ -44,7 +44,6 @@ LIGHT_SHADE_2X2 = "FAFAFA"
 # Location for your logo image. Make sure it's included in your Docker image.
 LOGO_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "logo", "company_logo.png")
 
-
 def lambda_handler(event, context):
     """
     1) Load secrets -> get token

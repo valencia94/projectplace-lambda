@@ -26,13 +26,15 @@ RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
 # 6) Copy your Lambda code & logo
 COPY lambda_handler.py ./
 COPY logo/ ./logo/
-COPY scripts/lambda_handler_tag.py  $LAMBDA_TASK_ROOT/tag.py   # <- NEW
 
-# promote tag.py to main handler only if arg is true
+# 7) Copy the tag-aware handler FROM scripts/  ->  ./tag.py
+COPY scripts/lambda_handler_tag.py ./tag.py   # <- fixed path
+
+# 8) Promote tag.py to main handler when we pass the build-arg
 ARG USE_TAG_HANDLER=false
 RUN if [ "$USE_TAG_HANDLER" = "true" ]; then \
-        mv $LAMBDA_TASK_ROOT/tag.py $LAMBDA_TASK_ROOT/lambda_handler.py ; \
+        mv ./tag.py ./lambda_handler.py ; \
     fi
     
-# 7) Lambda entry point
+# 9) Lambda entry point
 CMD [ "lambda_handler.lambda_handler" ]

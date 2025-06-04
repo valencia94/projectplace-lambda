@@ -21,20 +21,22 @@ RUN yum -y install libreoffice-headless || \
 
 # 5) Copy and install Python dependencies
 COPY requirements.txt .
-RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
+RUN pip3 install --upgrade pip && \
+    pip3 install -r requirements.txt             # ✅ Works
+    # (optionally add  --target "$LAMBDA_TASK_ROOT"
+    #  to keep deps in /var/task, but not required)
 
-# 6) Copy your Lambda code & logo
-COPY lambda_handler.py ./
+# 6  Copy prod handler + logo
+COPY lambda_handler.py .                         # root → /var/task
 COPY logo/ ./logo/
 
-# 7) Copy the tag-aware handler FROM scripts/  ->  ./tag.py
-COPY scripts/lambda_handler_tag.py ./tag.py   # <- fixed path
+# 7  Copy tag handler (path fixed)
+COPY scripts/lambda_handler_tag.py ./tag.py
 
-# 8) Promote tag.py to main handler when we pass the build-arg
+# 8  Promote tag handler when requested
 ARG USE_TAG_HANDLER=false
 RUN if [ "$USE_TAG_HANDLER" = "true" ]; then \
         mv ./tag.py ./lambda_handler.py ; \
     fi
-    
-# 9) Lambda entry point
-CMD [ "lambda_handler.lambda_handler" ]
+
+CMD ["lambda_handler.lambda_handler"]

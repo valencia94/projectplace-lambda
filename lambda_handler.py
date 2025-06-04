@@ -1,4 +1,4 @@
-import osMore actions
+import os
 import json
 import time
 import logging
@@ -214,56 +214,58 @@ def generate_excel_report(token, projects):
     all_cards = []
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
-for project_info in projects:
-    pid     = str(project_info.get("id"))
-    p_name  = project_info.get("name", "Unnamed Project")
+    for project_info in projects:
+        pid = str(project_info.get("id"))
+        p_name = project_info.get("name", "Unnamed Project")
+        cards_url = f"{PROJECTPLACE_API_URL}/1/projects/{pid}/cards"
 
-    # NEW ▸ get tag catalog once for this project
-    tag_map = fetch_project_tags(token, pid)            # {id: "compromiso", …}
-    compromiso_tag_ids = {k for k, v in tag_map.items() if v == "compromiso"}
+        try:
+            resp = requests.get(cards_url, headers=headers)
+            resp.raise_for_status()
+            cards = resp.json()
+            for c in cards:
+                row = dict(c)
+                cid = c.get("id")
 
-    cards_url = f"{PROJECTPLACE_API_URL}/1/projects/{pid}/cards"
-    try:
-        resp = requests.get(cards_url, headers=headers)
-        resp.raise_for_status()
+                cmts = fetch_comments_for_card(token, cid)
+                row["Comments"] = str(cmts)
 
-        for c in resp.json():
-            row = dict(c)
+                row["project_id"] = pid
+                row["project_name"] = p_name
+                row["archived"] = project_info.get("archived", False)
 
-            # ----------- NEW FIELDS -----------
-            row["due_date"] = c.get("due_date")          # raw string
-            row["tag_ids"]  = c.get("tag_ids", [])       # list of ints
-            # flag if this card is compromiso
-            row["is_compromiso"] = any(t in compromiso_tag_ids for t in row["tag_ids"])
-            # -----------------------------------
+                all_cards.append(row)
 
-            row["Comments"]   = str(fetch_comments_for_card(token, c["id"]))
-            row["project_id"] = pid
-            row["project_name"] = p_name
-            row["archived"]   = project_info.get("archived", False)
-            all_cards.append(row)
+            logger.info(f"Fetched {len(cards)} cards from project '{p_name}' ({pid}).")
 
-    except Exception as e:
-        logger.error(f"Error fetching cards for project {pid}: {e}")
+        except Exception as e:
+            logger.error(f"Error fetching cards for project {pid}: {str(e)}")
 
-    return out
-# --------------------------------------------------------------------------
-# TAGS
-# --------------------------------------------------------------------------
-def fetch_project_tags(token, project_id):
-    """
-    Returns {tag_id: tag_name} for the project (hidden tags are excluded).
-    """
-    url = f"{PROJECTPLACE_API_URL}/1/tags/projects/{project_id}/cards"
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if not all_cards:
+        logger.warning("No cards found across all projects.")
+        return None
+
+    df = pd.DataFrame(all_cards)
+    df.to_excel(OUTPUT_EXCEL, index=False)
+    logger.info(f"✅ Wrote {len(df)} rows to {OUTPUT_EXCEL}")
+    return OUTPUT_EXCEL
+
+
+def fetch_comments_for_card(token, card_id):
+    if not card_id:
+        return []
+    url = f"{PROJECTPLACE_API_URL}/1/cards/{card_id}/comments"
+    headers = {"Authorization": f"Bearer {token}", "Accept":"application/json"}
+    out = []
     try:
         r = requests.get(url, headers=headers)
         r.raise_for_status()
-        return {t["id"]: t["name"].lower() for t in r.json()}
+        for c in r.json():
+            out.append(c.get("text","N/A"))
     except Exception as e:
-        logger.error(f"Failed to fetch tags for project {project_id}: {e}")
-        return {}
-        
+        logger.error(f"Failed to fetch comments for card {card_id}: {str(e)}")
+    return out
+
 # ----------------------------------------------------------------------------
 # 4) DYNAMO
 # ----------------------------------------------------------------------------
@@ -279,10 +281,9 @@ def store_in_dynamodb(df):
             continue
         item = {
             "project_id": str(pid),
-            "card_id":    str(row.get("id", "N/A")),
-            "title":      str(row.get("title", "N/A")),
-            "due_date":   str(row.get("due_date", "")),  # NEW
-            "timestamp":  int(time.time())
+            "card_id": str(row.get("id","N/A")),
+            "title": str(row.get("title","N/A")),
+            "timestamp": int(time.time())
         }
         table.put_item(Item=item)
         inserted += 1
@@ -447,13 +448,7 @@ def add_project_status_table(doc, df):
             run.font.name = "Verdana"
 
 def add_commitments_table(doc, df):
-    """
-    Build COMPROMISOS:
-      • only cards where is_compromiso == True
-      • Responsable  ← comments_parsed
-      • Fecha        ← due_date (pretty-print)
-    """
-    commits = df[df["is_compromiso"] & (df["column_id"] == 1)]
+    commits = df[(df.get("board_name","") == "COMPROMISOS") & (df["column_id"] == 1)]
     if commits.empty:
         doc.add_paragraph("No commitments recorded.")
         return
@@ -461,33 +456,49 @@ def add_commitments_table(doc, df):
     table = doc.add_table(rows=1, cols=3)
     table.style = "Table Grid"
     table.autofit = False
+
+    hdr_row = table.rows[0]
+    hdr_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+    hdr_row.height = Inches(0.45)
+
     table.columns[0].width = Inches(3.0)
     table.columns[1].width = Inches(4.0)
     table.columns[2].width = Inches(3.0)
 
-    hdrs = ["COMPROMISO", "RESPONSABLE", "FECHA"]
-    hdr_cells = table.rows[0].cells
-    for i, h in enumerate(hdrs):
-        hdr_cells[i].text = h
-        r = hdr_cells[i].paragraphs[0].runs[0]
-        r.bold, r.font.size, r.font.name = True, Pt(12), "Verdana"
-        shd = OxmlElement("w:shd"); shd.set(qn("w:fill"), BRAND_COLOR_HEADER)
-        hdr_cells[i]._element.get_or_add_tcPr().append(shd)
+    col_headers = ["COMPROMISO", "RESPONSABLE", "FECHA"]
+    hdr_cells = hdr_row.cells
+    for i, hdr_text in enumerate(col_headers):
+        hdr_cells[i].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        hdr_cells[i].text = hdr_text
+        run = hdr_cells[i].paragraphs[0].runs[0]
+        run.bold = True
+        run.font.size = Pt(12)
+        run.font.name = "Verdana"
+        run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
+        shading_elm = OxmlElement("w:shd")
+        shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
+        hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
 
+    row_idx = 0
     for _, row in commits.iterrows():
-        compromiso  = str(row["title"])
-        responsable = str(row["comments_parsed"]).strip("[]'\" ")
+        new_cells = table.add_row().cells
 
-        fecha_raw = str(row["due_date"])
-        try:
-            fecha = datetime.strptime(fecha_raw[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
-        except Exception:
-            fecha = fecha_raw or ""
+        comp = str(row.get("title",""))
+        responsible = str(row.get("planlet_name",""))
+        last_comment = str(row.get("comments_parsed",""))
 
-        for val, cell in zip([compromiso, responsable, fecha], table.add_row().cells):
-            cell.text = val
-            run = cell.paragraphs[0].runs[0]
-            run.font.size, run.font.name = Pt(10), "Verdana"
+        date_str = parse_comment_for_date(last_comment)
+        if not date_str.strip():
+            date_str = last_comment.strip("[]'\" ") or "N/A"
+
+        data_vals = [comp, responsible, date_str]
+        for j, dv in enumerate(data_vals):
+            new_cells[j].text = dv
+            p = new_cells[j].paragraphs[0]
+            p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+            run = p.runs[0]
+            run.font.size = Pt(10)
+            run.font.name = "Verdana"
 
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")
@@ -498,6 +509,7 @@ def parse_comment_for_date(comment_text):
         except ValueError:
             pass
     return ""
+
 
 # ----------------------------------------------------------------------------
 # S3 & HELPER FUNCS
@@ -821,7 +833,7 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
     # Apply formatting
     for row in table.rows:
         for cell in row.cells:
-            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTERMore actions
             for para in cell.paragraphs:
                 para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
                 for run in para.runs:

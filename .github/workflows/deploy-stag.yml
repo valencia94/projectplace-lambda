@@ -1,0 +1,4 @@
+git checkout -b tag-logic
+git add lambda_handler_tag.py .github/workflows/deploy-stag.yml
+git commit -m "stag pipeline for tag-aware Acta build"
+git push origin tag-logic

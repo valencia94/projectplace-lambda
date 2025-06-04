@@ -27,7 +27,7 @@ RUN pip3 install --upgrade pip && \
     #  to keep deps in /var/task, but not required)
 
 # 6  Copy prod handler + logo
-COPY lambda_handler.py .                         # root → /var/task
+COPY lambda_handler.py ./
 COPY logo/ ./logo/
 
 # 7  Copy tag handler (path fixed)

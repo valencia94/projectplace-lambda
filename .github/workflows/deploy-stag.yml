@@ -1,4 +1,66 @@
-git checkout -b tag-logic
-git add lambda_handler_tag.py .github/workflows/deploy-stag.yml
-git commit -m "stag pipeline for tag-aware Acta build"
-git push origin tag-logic
+name: Deploy-and-Convert-Staging
+
+# ────────────────────────────────────────
+# Triggers
+#   • push to branch “tag-logic”
+#   • manual run via Actions ➜ “Run workflow”
+# ────────────────────────────────────────
+on:
+  push:
+    branches:
+      - tag-logic
+  workflow_dispatch:        # enable manual button in UI
+
+jobs:
+  deploy-lambda:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: us-east-2
+      # ECR repo URI (without tag)
+      ECR_URI: 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
+      # Full tag we’ll push and deploy
+      IMAGE_TAG: 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:stag
+
+    steps:
+      # 1) Checkout code
+      - uses: actions/checkout@v4
+
+      # 2) Configure AWS credentials (assumes you have repo secrets set)  
+      #    Replace AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY names if different.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 3) Log in to Amazon ECR
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | \
+            docker login --username AWS --password-stdin $ECR_URI
+
+      # 4) Build and push (no-cache, pull latest base)
+      - name: 🛠 Build (no-cache) & push staging image
+        run: |
+          docker build --no-cache --pull -t projectplace-lambda .
+          docker tag projectplace-lambda:latest $IMAGE_TAG
+          docker push $IMAGE_TAG
+
+      # 5) Update the *staging* Lambda to this image
+      - name: 🚀 Update staging Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --image-uri $IMAGE_TAG \
+            --region $AWS_REGION
+
+      # 6) Optional smoke test (invoke once)
+      - name: 🔎 Smoke invoke
+        run: |
+          aws lambda invoke \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --payload '{}' /tmp/out.json --region $AWS_REGION
+          echo "Lambda response:"
+          cat /tmp/out.json

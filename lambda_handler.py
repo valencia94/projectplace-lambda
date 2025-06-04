@@ -214,58 +214,56 @@ def generate_excel_report(token, projects):
     all_cards = []
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
-    for project_info in projects:
-        pid = str(project_info.get("id"))
-        p_name = project_info.get("name", "Unnamed Project")
-        cards_url = f"{PROJECTPLACE_API_URL}/1/projects/{pid}/cards"
+for project_info in projects:
+    pid     = str(project_info.get("id"))
+    p_name  = project_info.get("name", "Unnamed Project")
 
-        try:
-            resp = requests.get(cards_url, headers=headers)
-            resp.raise_for_status()
-            cards = resp.json()
-            for c in cards:
-                row = dict(c)
-                cid = c.get("id")
+    # NEW ▸ get tag catalog once for this project
+    tag_map = fetch_project_tags(token, pid)            # {id: "compromiso", …}
+    compromiso_tag_ids = {k for k, v in tag_map.items() if v == "compromiso"}
 
-                cmts = fetch_comments_for_card(token, cid)
-                row["Comments"] = str(cmts)
+    cards_url = f"{PROJECTPLACE_API_URL}/1/projects/{pid}/cards"
+    try:
+        resp = requests.get(cards_url, headers=headers)
+        resp.raise_for_status()
 
-                row["project_id"] = pid
-                row["project_name"] = p_name
-                row["archived"] = project_info.get("archived", False)
+        for c in resp.json():
+            row = dict(c)
 
-                all_cards.append(row)
+            # ----------- NEW FIELDS -----------
+            row["due_date"] = c.get("due_date")          # raw string
+            row["tag_ids"]  = c.get("tag_ids", [])       # list of ints
+            # flag if this card is compromiso
+            row["is_compromiso"] = any(t in compromiso_tag_ids for t in row["tag_ids"])
+            # -----------------------------------
 
-            logger.info(f"Fetched {len(cards)} cards from project '{p_name}' ({pid}).")
+            row["Comments"]   = str(fetch_comments_for_card(token, c["id"]))
+            row["project_id"] = pid
+            row["project_name"] = p_name
+            row["archived"]   = project_info.get("archived", False)
+            all_cards.append(row)
 
-        except Exception as e:
-            logger.error(f"Error fetching cards for project {pid}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error fetching cards for project {pid}: {e}")
 
-    if not all_cards:
-        logger.warning("No cards found across all projects.")
-        return None
-
-    df = pd.DataFrame(all_cards)
-    df.to_excel(OUTPUT_EXCEL, index=False)
-    logger.info(f"✅ Wrote {len(df)} rows to {OUTPUT_EXCEL}")
-    return OUTPUT_EXCEL
-
-
-def fetch_comments_for_card(token, card_id):
-    if not card_id:
-        return []
-    url = f"{PROJECTPLACE_API_URL}/1/cards/{card_id}/comments"
-    headers = {"Authorization": f"Bearer {token}", "Accept":"application/json"}
-    out = []
+    return out
+# --------------------------------------------------------------------------
+# TAGS
+# --------------------------------------------------------------------------
+def fetch_project_tags(token, project_id):
+    """
+    Returns {tag_id: tag_name} for the project (hidden tags are excluded).
+    """
+    url = f"{PROJECTPLACE_API_URL}/1/tags/projects/{project_id}/cards"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     try:
         r = requests.get(url, headers=headers)
         r.raise_for_status()
-        for c in r.json():
-            out.append(c.get("text","N/A"))
+        return {t["id"]: t["name"].lower() for t in r.json()}
     except Exception as e:
-        logger.error(f"Failed to fetch comments for card {card_id}: {str(e)}")
-    return out
-
+        logger.error(f"Failed to fetch tags for project {project_id}: {e}")
+        return {}
+        
 # ----------------------------------------------------------------------------
 # 4) DYNAMO
 # ----------------------------------------------------------------------------

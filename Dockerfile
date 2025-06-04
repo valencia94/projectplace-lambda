@@ -26,19 +26,17 @@ RUN pip3 install --upgrade pip && \
     # (optionally add  --target "$LAMBDA_TASK_ROOT"
     #  to keep deps in /var/task, but not required)
 
-# 6) Production handler + assets
-COPY lambda_handler.py .
+# 6  Copy prod handler + logo
+COPY lambda_handler.py ./
 COPY logo/ ./logo/
 
-# 7) Tag-aware handler (optional switch at build time)
+# 7  Copy tag handler (path fixed)
 COPY scripts/lambda_handler_tag.py ./tag.py
 
-# 8) Promote tag.py → lambda_handler.py if requested
+# 8  Promote tag handler when requested
 ARG USE_TAG_HANDLER=false
 RUN if [ "$USE_TAG_HANDLER" = "true" ]; then \
         mv ./tag.py ./lambda_handler.py ; \
-    fi
+    fiMore actions
 
-# 6) Lambda entry-point
 CMD ["lambda_handler.lambda_handler"]
-

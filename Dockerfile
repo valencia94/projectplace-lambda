@@ -29,3 +29,4 @@ COPY logo/ ./logo/
 
 # 7) Lambda entry point
 CMD [ "lambda_handler.lambda_handler" ]
+

@@ -37,6 +37,6 @@ COPY scripts/lambda_handler_tag.py ./tag.py
 ARG USE_TAG_HANDLER=false
 RUN if [ "$USE_TAG_HANDLER" = "true" ]; then \
         mv ./tag.py ./lambda_handler.py ; \
-    fiMore actions
+    fi
 
 CMD ["lambda_handler.lambda_handler"]

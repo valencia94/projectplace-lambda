@@ -431,25 +431,30 @@ def build_acta_for_project(pid, project_df):
     logger.info(f"Created doc => {doc_path}")
     return doc_path
 
-
 def add_project_status_table(doc, df):
-        df = df[df.get("label_id") != 0]
-        df = df[df.get("board_name","") != "COMPROMISOS"].copy()
-        df = df[~df["planlet_name"].isin(["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"])].copy()
+    # --- filter rows ---------------------------------------------------
+    df = df[df.get("label_id") != 0]                       # optional new filter
+    df = df[df.get("board_name", "") != "COMPROMISOS"].copy()
+    df = df[~df["planlet_name"].isin(
+        ["ASISTENCIA", "ASISTENCIA CLIENTE", "ASISTENCIA IKUSI"]
+    )].copy()
+
+    # --- collect rows for the table -----------------------------------
     table_data = []
     for _, row in df.iterrows():
-        hito = str(row.get("planlet_name",""))
-        actividades = str(row.get("title",""))
-        desarrollo = str(row.get("comments_parsed",""))
+        hito        = str(row.get("planlet_name", ""))
+        actividades = str(row.get("title", ""))
+        desarrollo  = str(row.get("comments_parsed", ""))
         table_data.append([hito, actividades, desarrollo])
 
+    # --- build the actual Word table (one-time) ------------------------
     table = doc.add_table(rows=1, cols=3)
-    table.style = "Table Grid"
+    table.style  = "Table Grid"
     table.autofit = False
 
     hdr_row = table.rows[0]
     hdr_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
-    hdr_row.height = Inches(0.45)
+    hdr_row.height      = Inches(0.45)
 
     table.columns[0].width = Inches(2.5)
     table.columns[1].width = Inches(2.5)
@@ -457,7 +462,6 @@ def add_project_status_table(doc, df):
 
     # CHANGED: "HITO" => "HITO/TEMA"
     headers = ["HITO/TEMA", "ACTIVIDADES", "DESARROLLO"]  # <--- CHANGED
-
     hdr_cells = hdr_row.cells
     for i, hdr_text in enumerate(headers):
         hdr_cells[i].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER

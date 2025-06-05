@@ -1,13 +1,28 @@
-FROM amazonlinux:2
+# Use a specific Python version compatible with NumPy 1.24.2
+FROM python:3.10-slim
 
-RUN yum -y update && \
-    yum -y install python3-pip libreoffice-headless && \
-    yum clean all && rm -rf /var/cache/yum
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
+# Set work directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip
+RUN pip install --upgrade pip
+
+# Copy requirements and install
 COPY requirements.txt .
-RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY lambda_handler.py ./
-COPY logo/ ./logo/
+# Copy application code
+COPY . .
 
-CMD [ "lambda_handler.lambda_handler" ]
+# Command to run on container start
+CMD ["python", "lambda_handler.py"]
+

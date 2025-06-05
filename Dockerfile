@@ -1,23 +1,20 @@
 FROM public.ecr.aws/lambda/python:3.10
 
-# 1) Install curl so we can fetch the EPEL .rpmMore actions
-RUN yum -y install curl
+# 1) Update and install curl
+RUN yum -y update && yum -y install curl
 
-# 2) Download a known EPEL 7 release RPM. 
-#    (Amazon Linux 2 is mostly compatible with RHEL 7 packages.)
-RUN curl -SL -o /tmp/epel.rpm \
-    https://dl.fedoraproject.org/pub/epel/7/Everything/x86_64/Packages/e/epel-release-7-14.noarch.rpm
+# 2) Download and install the latest EPEL release for EL7
+RUN curl -SL -o /tmp/epel.rpm https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm && \
+    rpm -ivh /tmp/epel.rpm
 
-# 3) Install the EPEL repo from that .rpm
-RUN rpm -ivh /tmp/epel.rpm || echo "Attempted to install EPEL"
-
-# 4) Try installing LibreOffice in one of these packages.
-#    If 'libreoffice-headless' doesn't exist, we fallback to 'libreoffice'
-#    If that also fails, we fallback to 'libreoffice-core libreoffice-writer'
+# 3) Install LibreOffice headless (and fallback options just in case)
 RUN yum -y install libreoffice-headless || \
     yum -y install libreoffice || \
     yum -y install libreoffice-core libreoffice-writer || \
     echo "All LibreOffice installs failed. EPEL might not ship it."
+
+# 4) Clean up (recommended for smaller images)
+RUN yum clean all && rm -rf /var/cache/yum
 
 # 5) Copy and install Python dependencies
 COPY requirements.txt .

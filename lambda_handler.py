@@ -869,7 +869,6 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
             for para in cell.paragraphs:
                 para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
                 for run in para.runs:
-                    run.font.size = Pt(10)
                     run.font.name = "Verdana"
 
     doc.add_paragraph()

@@ -1,4 +1,4 @@
-ROM public.ecr.aws/lambda/python:3.10
+FROM public.ecr.aws/lambda/python:3.10
 
 # Install curl and update
 RUN yum -y update && yum -y install curl

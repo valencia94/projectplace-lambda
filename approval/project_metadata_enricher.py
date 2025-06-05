@@ -136,7 +136,9 @@ def lambda_handler(event=None, context=None):
                 ":progress":         _d(card.get("progress")),
                 ":project_val":      _d(card.get("project")),  # alias
                 ":reported_time":    card.get("reported_time"),
-                ":comments":         _d(comments),             # full comments stored
+                ":label_id":        card.get("label_id"),
+                ":due_date":        card.get("due_date"),
+                ":comments":         _d(comments),             
                 ":direct_url":       card.get("direct_url"),
                 ":is_done":          card.get("is_done"),
                 ":is_blocked":       card.get("is_blocked"),
@@ -171,6 +173,8 @@ def lambda_handler(event=None, context=None):
                             progress            = :progress,
                             #project            = :project_val,
                             reported_time       = :reported_time,
+                            lebel_id            = :label_id,
+                            due_date            = :due_date
                             comments            = :comments,
                             direct_url          = :direct_url,
                             is_done             = :is_done,

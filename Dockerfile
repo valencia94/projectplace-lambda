@@ -16,9 +16,9 @@ RUN yum -y install libreoffice-headless || \
 # 4) Clean up (recommended for smaller images)
 RUN yum clean all && rm -rf /var/cache/yum
 
-# 5) Copy and install Python dependencies
+# 5) Python dependencies
 COPY requirements.txt .
-RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
 # 6) Copy your Lambda code & logo
 COPY lambda_handler.py ./

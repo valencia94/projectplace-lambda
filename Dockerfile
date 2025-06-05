@@ -1,19 +1,19 @@
-FROM public.ecr.aws/lambda/python:3.10
+ROM public.ecr.aws/lambda/python:3.10
 
-# 1) Update and install curl
+# Install curl and update
 RUN yum -y update && yum -y install curl
 
-# 2) Download and install the latest EPEL release for EL7
+# Download and install latest EPEL 7 RPM; check file type for debugging
 RUN curl -SL -o /tmp/epel.rpm https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm && \
+    file /tmp/epel.rpm && \
     rpm -ivh /tmp/epel.rpm
 
-# 3) Install LibreOffice headless (and fallback options just in case)
+# Install LibreOffice (headless) and clean up
 RUN yum -y install libreoffice-headless || \
     yum -y install libreoffice || \
     yum -y install libreoffice-core libreoffice-writer || \
     echo "All LibreOffice installs failed. EPEL might not ship it."
 
-# 4) Clean up (recommended for smaller images)
 RUN yum clean all && rm -rf /var/cache/yum
 
 # 5) Python dependencies

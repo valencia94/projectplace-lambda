@@ -468,7 +468,7 @@ def add_project_status_table(doc, df):
         hdr_cells[i].text = hdr_text
         run = hdr_cells[i].paragraphs[0].runs[0]
         run.bold = True
-        run.font.size = Pt(20)
+        run.font.size = Pt(14)
         run.font.name = "Verdana"
         run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
 
@@ -754,7 +754,7 @@ def add_asistencia_table(doc, df):
     hdr_cells[0].text = "ASISTENCIA IKUSI"  # <--- CHANGED
     run0 = hdr_cells[0].paragraphs[0].runs[0]
     run0.bold = True
-    run0.font.size = Pt(12)
+    run0.font.size = Pt(14)
     run0.font.name = "Verdana"
     run0.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
     shading_elm0 = OxmlElement("w:shd")
@@ -765,7 +765,7 @@ def add_asistencia_table(doc, df):
     hdr_cells[1].text = "ASISTENCIA CLIENTE"
     run1 = hdr_cells[1].paragraphs[0].runs[0]
     run1.bold = True
-    run1.font.size = Pt(12)
+    run1.font.size = Pt(14)
     run1.font.name = "Verdana"
     run1.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
     shading_elm1 = OxmlElement("w:shd")

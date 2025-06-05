@@ -433,7 +433,7 @@ def build_acta_for_project(pid, project_df):
 
 def add_project_status_table(doc, df):
     # --- filter rows ---------------------------------------------------
-    df = df[df.get("label_id") != 0]                       # optional new filter
+    df = df[df["label_id"] != 0]
     df = df[df.get("board_name", "") != "COMPROMISOS"].copy()
     df = df[~df["planlet_name"].isin(
         ["ASISTENCIA", "ASISTENCIA CLIENTE", "ASISTENCIA IKUSI"]

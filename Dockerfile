@@ -1,6 +1,6 @@
-FROM public.ecr.aws/lambda/python:3.10 
+FROM public.ecr.aws/lambda/python:3.10
 
-# 1) Install curl so we can fetch the EPEL .rpm
+# 1) Install curl so we can fetch the EPEL .rpmMore actions
 RUN yum -y install curl
 
 # 2) Download a known EPEL 7 release RPM. 
@@ -21,22 +21,11 @@ RUN yum -y install libreoffice-headless || \
 
 # 5) Copy and install Python dependencies
 COPY requirements.txt .
-RUN pip3 install --upgrade pip && \
-    pip3 install -r requirements.txt             # ✅ Works
-    # (optionally add  --target "$LAMBDA_TASK_ROOT"
-    #  to keep deps in /var/task, but not required)
+RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
 
-# 6  Copy prod handler + logo
+# 6) Copy your Lambda code & logo
 COPY lambda_handler.py ./
 COPY logo/ ./logo/
 
-# 7  Copy tag handler (path fixed)
-COPY scripts/lambda_handler_tag.py ./tag.py
-
-# 8  Promote tag handler when requested
-ARG USE_TAG_HANDLER=false
-RUN if [ "$USE_TAG_HANDLER" = "true" ]; then \
-        mv ./tag.py ./lambda_handler.py ; \
-    fi
-
-CMD ["lambda_handler.lambda_handler"]
+# 7) Lambda entry point
+CMD [ "lambda_handler.lambda_handler" ]

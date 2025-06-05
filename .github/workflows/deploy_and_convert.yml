@@ -5,20 +5,27 @@ on:
     branches: [ main ]
   workflow_dispatch: {}
 
-env:                # top-level env (static only)
-  AWS_REGION:    us-east-2
-  ECR_REGISTRY:  703671891952.dkr.ecr.us-east-2.amazonaws.com
+###############################################################################
+# 🍃  Static globals  (NO interpolations here!)
+###############################################################################
+env:
+  AWS_REGION:     us-east-2
+  ECR_REGISTRY:   703671891952.dkr.ecr.us-east-2.amazonaws.com
   ECR_REPOSITORY: projectplace-lambda
-  STAGE_TAG:     stag
+  STAGE_TAG:      stag          # e.g. “latest”, “stag”, “v1.2.3”
 
+###############################################################################
 jobs:
   deploy-lambda:
     runs-on: ubuntu-latest
-    env:        # derived vars belong here (or inside a single step)
+
+    # ── derived vars belong here (they CAN reference top-level env) ──
+    env:
       IMAGE_TAG: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.STAGE_TAG }}
 
     steps:
-      - uses: actions/checkout@v3
+      - name: 📥 Checkout source
+        uses: actions/checkout@v3
 
       - name: 🔐 Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -27,135 +34,133 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
-      - name: 🐳 Login to ECR
+      - name: 🐳 Login to Amazon ECR
         run: |
-          aws ecr get-login-password --region $AWS_REGION |
-            docker login --username AWS --password-stdin $ECR_REGISTRY
+          aws ecr get-login-password --region "$AWS_REGION" |
+            docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-      - name: 🛠 Build & push
+      - name: 🛠 Build (no-cache) **and push** Docker image
         run: |
+          set -euo pipefail
+          # Build for amd64 so it runs in Lambda container
           docker buildx build \
             --no-cache --pull \
             --platform linux/amd64 \
             --build-arg USE_TAG_HANDLER=true \
-            -t projectplace-lambda:latest \
-            -t $IMAGE_TAG \
+            -t "$IMAGE_TAG" \
             --push .
 
-
     # ───────────── Update Lambda code ────
-    - name: 🚀 Update Lambda to latest image
-      run: |
-        set -euo pipefail
-        aws lambda update-function-code \
-          --function-name ProjectPlaceDataExtractor-stag \
-          --image-uri "$IMAGE_TAG" \
-          --region "$AWS_REGION"
-
-    # ───────────── Wait for code update ──
-    - name: ⏳ Wait for code update to finish
-      run: |
-        aws lambda wait function-updated \
-          --function-name ProjectPlaceDataExtractor-stag \
-          --region "$AWS_REGION"
-
-    # ───────────── Merge env-vars ────────
-    - name: 📦 Install jq
-      run: sudo apt-get update && sudo apt-get install -y jq
-
-    - name: 🧬 Merge & apply env-vars
-      run: |
-        set -euo pipefail
-        OLD=$(aws lambda get-function-configuration \
-               --function-name ProjectPlaceDataExtractor-stag \
-               --query 'Environment.Variables' --output json)
-
-        NEW=$(echo "$OLD" | jq \
-          --arg secret ProjectPlaceAPICredentials \
-          --arg ddb   ProjectPlace_DataExtrator_landing_table_v3 \
-          --arg s3    projectplace-dv-2025-x9a7b \
-          '. + {
-             SECRET_NAME:        $secret,
-             DYNAMODB_TABLE_NAME:$ddb,
-             S3_BUCKET_NAME:     $s3
-           }')
-
-        echo '{"Variables":'"$NEW"'}' > env.json
-
-        aws lambda update-function-configuration \
-          --function-name ProjectPlaceDataExtractor-stag \
-          --environment file://env.json \
-          --region "$AWS_REGION"
-
-    # ───────────── Wait for env update ───
-    - name: ⏳ Wait for env update
-      run: |
-        aws lambda wait function-updated \
-          --function-name ProjectPlaceDataExtractor-stag \
-          --region "$AWS_REGION"
-
-    # ───────────── Smoke test ────────────
-    - name: 🔎 One-shot Lambda invoke (async)
-      run: |
-        aws lambda invoke \
-          --function-name ProjectPlaceDataExtractor-stag \
-          --invocation-type Event \
-          --payload '{}' \
-          --region "$AWS_REGION" \
-          /tmp/out.json
-        echo "Lambda triggered → $(cat /tmp/out.json)"
-
-#####################################################################
-#  ──────────────── 2) Convert DOCX → PDF job ──────────────────────
-#####################################################################
-  convert-docx:
-    runs-on: ubuntu-latest
-    needs: [ deploy-lambda ]
-
-    steps:
-    - name: 📥 Checkout source
-      uses: actions/checkout@v3
-
-    - name: 🔐 Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region:            ${{ env.AWS_REGION }}
-
-    - name: 🏗 Install LibreOffice
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libreoffice
-
-    - name: 📥 Wait and download Acta_*.docx from S3
-      run: |
-        mkdir -p actas
-        for i in {1..15}; do
-          echo "⏳ Attempt $i: checking for 'Acta_*.docx' in S3..."
-          aws s3 sync \
-            s3://projectplace-dv-2025-x9a7b/actas actas \
-            --exclude "*" --include "Acta_*.docx" --delete
-          COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l)
-          if [ "$COUNT" -gt 0 ]; then
-            echo "✅ Found $COUNT .docx file(s)."
-            break
-          fi
-          echo "🔄 Not ready. Sleeping 20 s…"
-          sleep 20
-          [ "$i" -eq 15 ] && { echo "❌ Timeout (5 min)"; exit 1; }
-        done
-
-    - name: 🖨 Convert each .docx ⇒ .pdf
-      run: |
-        cd actas
-        for f in Acta_*.docx; do
-          libreoffice --headless --convert-to pdf "$f"
-        done
-
-    - name: 🚀 Upload .pdf files back to S3
-      run: |
-        aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
-          --exclude "*" --include "Acta_*.pdf" \
-          --content-type "application/pdf" \
-          --content-disposition "attachment"
+      - name: 🚀 Update Lambda to latest image
+        run: |
+          set -euo pipefail
+          aws lambda update-function-code \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --image-uri "$IMAGE_TAG" \
+            --region "$AWS_REGION"
+  
+      # ───────────── Wait for code update ──
+      - name: ⏳ Wait for code update to finish
+        run: |
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --region "$AWS_REGION"
+  
+      # ───────────── Merge env-vars ────────
+      - name: 📦 Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+  
+      - name: 🧬 Merge & apply env-vars
+        run: |
+          set -euo pipefail
+          OLD=$(aws lambda get-function-configuration \
+                 --function-name ProjectPlaceDataExtractor-stag \
+                 --query 'Environment.Variables' --output json)
+  
+          NEW=$(echo "$OLD" | jq \
+            --arg secret ProjectPlaceAPICredentials \
+            --arg ddb   ProjectPlace_DataExtrator_landing_table_v3 \
+            --arg s3    projectplace-dv-2025-x9a7b \
+            '. + {
+               SECRET_NAME:        $secret,
+               DYNAMODB_TABLE_NAME:$ddb,
+               S3_BUCKET_NAME:     $s3
+             }')
+  
+          echo '{"Variables":'"$NEW"'}' > env.json
+  
+          aws lambda update-function-configuration \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --environment file://env.json \
+            --region "$AWS_REGION"
+  
+      # ───────────── Wait for env update ───
+      - name: ⏳ Wait for env update
+        run: |
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --region "$AWS_REGION"
+  
+      # ───────────── Smoke test ────────────
+      - name: 🔎 One-shot Lambda invoke (async)
+        run: |
+          aws lambda invoke \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --invocation-type Event \
+            --payload '{}' \
+            --region "$AWS_REGION" \
+            /tmp/out.json
+          echo "Lambda triggered → $(cat /tmp/out.json)"
+  
+  
+  #  ──────────────── 2) Convert DOCX → PDF job ──────────────────────
+      runs-on: ubuntu-latest
+      needs: [ deploy-lambda ]
+  
+      steps:
+      - name: 📥 Checkout source
+        uses: actions/checkout@v3
+  
+      - name: 🔐 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+  
+      - name: 🏗 Install LibreOffice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice
+  
+      - name: 📥 Wait and download Acta_*.docx from S3
+        run: |
+          mkdir -p actas
+          for i in {1..15}; do
+            echo "⏳ Attempt $i: checking for 'Acta_*.docx' in S3..."
+            aws s3 sync \
+              s3://projectplace-dv-2025-x9a7b/actas actas \
+              --exclude "*" --include "Acta_*.docx" --delete
+            COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l)
+            if [ "$COUNT" -gt 0 ]; then
+              echo "✅ Found $COUNT .docx file(s)."
+              break
+            fi
+            echo "🔄 Not ready. Sleeping 20 s…"
+            sleep 20
+            [ "$i" -eq 15 ] && { echo "❌ Timeout (5 min)"; exit 1; }
+          done
+  
+      - name: 🖨 Convert each .docx ⇒ .pdf
+        run: |
+          cd actas
+          for f in Acta_*.docx; do
+            libreoffice --headless --convert-to pdf "$f"
+          done
+  
+      - name: 🚀 Upload .pdf files back to S3
+        run: |
+          aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
+            --exclude "*" --include "Acta_*.pdf" \
+            --content-type "application/pdf" \
+            --content-disposition "attachment"

@@ -12,17 +12,11 @@ env:
   ECR_REPOSITORY: projectplace-lambda
   STAGE_TAG:      stag           # literal; don’t use expressions here
 
-########################################################################
 jobs:
-########################################################################
+  deploy-lambda:        # exactly 2 spaces before “deploy-lambda:”
+    runs-on: ubuntu-latest
+      steps:
 
-############################
-# 1) Build + ship to Lambda
-############################
-deploy-lambda:
-  runs-on: ubuntu-latest
-
-  steps:
   - name: 📥 Checkout
     uses: actions/checkout@v3
 

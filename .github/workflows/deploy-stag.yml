@@ -1,169 +1,148 @@
 # .github/workflows/deploy_and_convert.yml
-# ------------------------------------------------------------
-name: Deploy and Convert - stag              # parens removed → avoid quoting issues
+name: Deploy and Convert - stag
+
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch: {}
+    branches: [main]
+  workflow_dispatch:
 
-# ── global constants ─────────────────────────────────────────
 env:
   AWS_REGION:     us-east-2
   ECR_REGISTRY:   703671891952.dkr.ecr.us-east-2.amazonaws.com
   ECR_REPOSITORY: projectplace-lambda
-  STAGE_TAG:      stag                       # literal; no ${{ … }}
-
-concurrency:                                # avoid parallel pushes stepping on each other
-  group: deploy-and-convert-${{ github.ref }}
-  cancel-in-progress: false
+  STAGE_TAG:      stag
 
 jobs:
-  ################################################################
-  # 1) Build container & update ProjectPlaceDataExtractor-stag
-  ################################################################
-  deploy-lambda:                          # ⬅️ *inside* jobs:
-    runs-on: ubuntu-latest
+  deploy-lambda:                # ‹-- 2 spaces
+    runs-on: ubuntu-latest      # ‹-- 4 spaces
+    steps:                      # ‹-- 4 spaces
+      - name: Checkout          # ‹-- 4 spaces (list item)
+        uses: actions/checkout@v3
 
-    steps:                                # ⬅️ correctly indented under job
-    - name: 📥 Checkout
-      uses: actions/checkout@v3
+      - name: Configure AWS creds
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
 
-    - name: 🔐 Configure AWS creds
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region:            ${{ env.AWS_REGION }}
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: 🏗 Set up Docker Buildx        # new: safer multi-arch builds
-      uses: docker/setup-buildx-action@v3
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" |
+          docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-    - name: 🔧 Export IMAGE_TAG
-      run: |
-        echo "IMAGE_TAG=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.STAGE_TAG }}" >>"$GITHUB_ENV"
+      - name: Build & push image
+        env:
+          IMAGE_TAG: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.STAGE_TAG }}
+        run: |
+          docker buildx build \
+            --no-cache --pull \
+            --platform linux/amd64 \
+            --build-arg USE_TAG_HANDLER=true \
+            -t "$IMAGE_TAG" \
+            --push .
 
-    - name: 🐳 Login to ECR
-      run: |
-        aws ecr get-login-password --region "$AWS_REGION" |
-        docker login --username AWS --password-stdin "$ECR_REGISTRY"
+      - name: Update Lambda code
+        env:
+          IMAGE_TAG: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.STAGE_TAG }}
+        run: |
+          aws lambda update-function-code \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --image-uri "$IMAGE_TAG" \
+            --region "$AWS_REGION"
 
-    - name: 🛠 Build & push (no-cache, linux/amd64)
-      run: |
-        set -euo pipefail
-        docker buildx build \
-          --no-cache --pull \
-          --platform linux/amd64 \
-          --build-arg USE_TAG_HANDLER=true \
-          -t "$IMAGE_TAG" \
-          --push .
+      - name: Wait for code update
+        run: |
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --region "$AWS_REGION"
 
-    - name: 🚀 Update Lambda code
-      run: |
-        aws lambda update-function-code \
-          --function-name ProjectPlaceDataExtractor-stag \
-          --image-uri "$IMAGE_TAG" \
-          --region "$AWS_REGION"
+      - name: Install jq
+        run: sudo apt-get update -y && sudo apt-get install -y jq
 
-    - name: ⏳ Wait for code update to finish
-      run: |
-        aws lambda wait function-updated \
-          --function-name ProjectPlaceDataExtractor-stag \
-          --region "$AWS_REGION"
+      - name: Merge & apply env vars
+        run: |
+          OLD=$(aws lambda get-function-configuration \
+                  --function-name ProjectPlaceDataExtractor-stag \
+                  --query 'Environment.Variables' --output json)
 
-    # ── Merge / upsert environment variables ───────────────────
-    - name: 📦 Install jq
-      run: sudo apt-get update -y && sudo apt-get install -y jq
+          NEW=$(echo "$OLD" | jq \
+            --arg secret ProjectPlaceAPICredentials \
+            --arg ddb   ProjectPlace_DataExtrator_landing_table_v3 \
+            --arg s3    projectplace-dv-2025-x9a7b \
+            '. + {
+              SECRET_NAME:         $secret,
+              DYNAMODB_TABLE_NAME: $ddb,
+              S3_BUCKET_NAME:      $s3
+            }')
 
-    - name: 🧬 Merge & apply env vars
-      run: |
-        OLD=$(aws lambda get-function-configuration \
-                --function-name ProjectPlaceDataExtractor-stag \
-                --query 'Environment.Variables' --output json)
+          printf '{"Variables":%s}\n' "$NEW" > env.json
 
-        NEW=$(echo "$OLD" | jq \
-          --arg secret ProjectPlaceAPICredentials \
-          --arg ddb   ProjectPlace_DataExtrator_landing_table_v3 \
-          --arg s3    projectplace-dv-2025-x9a7b \
-          '. + {
-            SECRET_NAME:         $secret,
-            DYNAMODB_TABLE_NAME: $ddb,
-            S3_BUCKET_NAME:      $s3
-          }')
+          aws lambda update-function-configuration \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --environment file://env.json \
+            --region "$AWS_REGION"
 
-        echo '{"Variables":'"$NEW"'}' > env.json
+      - name: Wait for env update
+        run: |
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --region "$AWS_REGION"
 
-        aws lambda update-function-configuration \
-          --function-name ProjectPlaceDataExtractor-stag \
-          --environment file://env.json \
-          --region "$AWS_REGION"
+      - name: Kick Lambda (async)
+        run: |
+          aws lambda invoke \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --invocation-type Event \
+            --payload '{}' \
+            --region "$AWS_REGION" \
+            /tmp/out.json
+          echo "Lambda triggered → $(cat /tmp/out.json)"
 
-    - name: ⏳ Wait for env update
-      run: |
-        aws lambda wait function-updated \
-          --function-name ProjectPlaceDataExtractor-stag \
-          --region "$AWS_REGION"
-
-    - name: 🔎 Kick Lambda (async) to verify
-      run: |
-        aws lambda invoke \
-          --function-name ProjectPlaceDataExtractor-stag \
-          --invocation-type Event \
-          --payload '{}' \
-          --region "$AWS_REGION" \
-          /tmp/out.json
-        echo "Lambda triggered → $(cat /tmp/out.json)"
-
-  ################################################################
-  # 2) Convert generated DOCX files to PDF
-  ################################################################
-  convert-docx:                           # ⬅️ same level as deploy-lambda
+  convert-docx:                 # ‹-- 2 spaces (peer of deploy-lambda)
     runs-on: ubuntu-latest
     needs: deploy-lambda
-
     steps:
-    - name: 📥 Checkout
-      uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
 
-    - name: 🔐 Configure AWS creds
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region:            ${{ env.AWS_REGION }}
+      - name: Configure AWS creds
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
 
-    - name: 🏗 Install LibreOffice
-      run: |
-        sudo apt-get update -q
-        sudo apt-get install -y libreoffice
+      - name: Install LibreOffice
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y libreoffice
 
-    - name: 📥 Wait & download Acta_*.docx
-      run: |
-        mkdir -p actas
-        for i in {1..15}; do
-          echo "⏳ Attempt $i: checking for Acta_*.docx in S3..."
-          aws s3 sync \
-            s3://projectplace-dv-2025-x9a7b/actas actas \
-            --exclude "*" --include "Acta_*.docx" --delete
-          COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l || true)
-          if [ "$COUNT" -gt 0 ]; then
-            echo "✅ Found $COUNT .docx file(s)."
-            break
-          fi
-          echo "🔄 Not ready. Sleeping 20 s…"
-          sleep 20
-        done
+      - name: Wait & download Acta_*.docx
+        run: |
+          mkdir -p actas
+          for i in {1..15}; do
+            echo "Attempt $i: checking S3..."
+            aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas \
+              --exclude "*" --include "Acta_*.docx" --delete
+            COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l || true)
+            [ "$COUNT" -gt 0 ] && break
+            sleep 20
+          done
 
-    - name: 🖨 Convert DOCX ⇒ PDF
-      run: |
-        cd actas
-        for f in Acta_*.docx; do
-          libreoffice --headless --convert-to pdf "$f"
-        done
+      - name: Convert DOCX ⇒ PDF
+        run: |
+          cd actas
+          for f in Acta_*.docx; do
+            libreoffice --headless --convert-to pdf "$f"
+          done
 
-    - name: 🚀 Upload PDFs back to S3
-      run: |
-        aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
-          --exclude "*" --include "Acta_*.pdf" \
-          --content-type "application/pdf" \
-          --content-disposition "attachment"
-        echo "✅ PDF upload complete."
+      - name: Upload PDFs back to S3
+        run: |
+          aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
+            --exclude "*" --include "Acta_*.pdf" \
+            --content-type "application/pdf" \
+            --content-disposition "attachment"

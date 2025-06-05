@@ -1,106 +1,20 @@
-name: Deploy and Convert
+name: Deploy and Convert (stag)
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch: {}
+
+env:                      # <── shared globals
+  AWS_REGION:    us-east-2
+  ECR_REGISTRY:  703671891952.dkr.ecr.us-east-2.amazonaws.com
+  ECR_REPOSITORY: projectplace-lambda
+  STAGE_TAG:     stag
+  IMAGE_TAG:     ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.STAGE_TAG }}
 
 jobs:
   deploy-lambda:
     runs-on: ubuntu-latest
-
-    steps:
-      - name: 📥 Checkout source code
-        uses: actions/checkout@v3
-
-      - name: 🔐 Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-2
-
-      - name: 🐳 Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region us-east-2 | \
-          docker login --username AWS --password-stdin \
-            703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
-
-      - name: 🛠 Build (no-cache) and push Docker image to ECR
-        run: |
-          # 1️⃣ Force a clean rebuild (ignore ALL cached layers)
-          docker build --no-cache --pull -t projectplace-lambda .
-          # 2️⃣ Tag with full ECR URI
-          docker tag projectplace-lambda:latest $IMAGE_TAG
-          # 3️⃣ Push
-          docker push $IMAGE_TAG
-      # ─────────────────────────────────────────────────────────────
-
-      - name: 🚀 Update Lambda to latest image
-        run: |
-          aws lambda update-function-code \
-            --function-name ProjectPlaceDataExtractor \
-            --image-uri $IMAGE_TAG \
-            --region $AWS_REGION
-
-      # Optional smoke test (invoke once and tail logs)
-      - name: 🔎 One-shot Lambda invocation
-        run: |
-          aws lambda invoke --function-name ProjectPlaceDataExtractor --payload '{}' /tmp/out.json
-          echo "Payload →"; cat /tmp/out.json
-
-      - name: ⏳ Wait for Lambda code update to finish
-        run: |
-          aws lambda wait function-updated \
-            --function-name ProjectPlaceDataExtractor \
-            --region us-east-2
-
-      - name: 🧬 Merge and apply environment variables
-        run: |
-          OLD_ENV_JSON=$(aws lambda get-function-configuration \
-            --function-name ProjectPlaceDataExtractor \
-            --region us-east-2 \
-            --query 'Environment.Variables' --output json)
-
-          NEW_ENV_JSON=$(echo "$OLD_ENV_JSON" | jq \
-            --arg secret "ProjectPlaceAPICredentials" \
-            --arg ddb "ProjectPlace_DataExtrator_landing_table_v3" \
-            --arg s3 "projectplace-dv-2025-x9a7b" \
-            '. + {
-              "SECRET_NAME": $secret,
-              "DYNAMODB_TABLE_NAME": $ddb,
-              "S3_BUCKET_NAME": $s3
-            }'
-          )
-
-          echo '{"Variables":'"$NEW_ENV_JSON"'}' > tmp_env.json
-
-          aws lambda update-function-configuration \
-            --function-name ProjectPlaceDataExtractor \
-            --region us-east-2 \
-            --environment file://tmp_env.json
-
-      - name: ⏳ Wait for environment update to finish
-        run: |
-          aws lambda wait function-updated \
-            --function-name ProjectPlaceDataExtractor \
-            --region us-east-2
-
-      - name: 🏁 Invoke Lambda Asynchronously
-        run: |
-          aws lambda invoke \
-            --function-name ProjectPlaceDataExtractor \
-            --region us-east-2 \
-            --payload '{}' \
-            --invocation-type Event \
-            out.json \
-            --cli-binary-format raw-in-base64-out
-          echo "✅ Lambda invoked. Now waiting for Actas to finish generating..."
-
-  convert-docx:
-    runs-on: ubuntu-latest
-    needs: [deploy-lambda]
 
     steps:
       - name: 📥 Checkout source
@@ -109,9 +23,100 @@ jobs:
       - name: 🔐 Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-2
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: 🐳 Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" |
+          docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+      - name: 🛠 Build (no-cache) and push Docker image
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --no-cache --pull \
+            --platform linux/amd64 \
+            --build-arg USE_TAG_HANDLER=true \
+            -t projectplace-lambda:latest \
+            -t "$IMAGE_TAG" \
+            --push .             # ← pushes in one shot
+
+      - name: 🚀 Update Lambda to latest image
+        run: |
+          set -euo pipefail
+          aws lambda update-function-code \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --image-uri "$IMAGE_TAG" \
+            --region "$AWS_REGION"
+
+      - name: ⏳ Wait for code update to finish
+        run: |
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --region "$AWS_REGION"
+
+      # ─────────────── Environment variables merge ───────────────
+      - name: 📦 Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: 🧬 Merge & apply env-vars
+        run: |
+          set -euo pipefail
+          OLD=$(aws lambda get-function-configuration \
+                 --function-name ProjectPlaceDataExtractor-stag \
+                 --query 'Environment.Variables' --output json)
+
+          NEW=$(echo "$OLD" | jq \
+            --arg secret ProjectPlaceAPICredentials \
+            --arg ddb   ProjectPlace_DataExtrator_landing_table_v3 \
+            --arg s3    projectplace-dv-2025-x9a7b \
+            '. + {
+               SECRET_NAME:        $secret,
+               DYNAMODB_TABLE_NAME:$ddb,
+               S3_BUCKET_NAME:     $s3
+             }')
+
+          echo '{"Variables":'"$NEW"'}' > env.json
+
+          aws lambda update-function-configuration \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --environment file://env.json \
+            --region "$AWS_REGION"
+
+      - name: ⏳ Wait for env update
+        run: |
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --region "$AWS_REGION"
+
+      # ─────────────── Smoke test ───────────────
+      - name: 🔎 One-shot Lambda invoke (async)
+        run: |
+          aws lambda invoke \
+            --function-name ProjectPlaceDataExtractor-stag \
+            --invocation-type Event \
+            --payload '{}' \
+            --region "$AWS_REGION" \
+            /tmp/out.json
+          echo "Lambda triggered → $(cat /tmp/out.json)"
+
+  # ───────────────────────── Convert job ─────────────────────────
+  convert-docx:
+    runs-on: ubuntu-latest
+    needs: [ deploy-lambda ]
+
+    steps:
+      - name: 📥 Checkout source
+        uses: actions/checkout@v3
+
+      - name: 🔐 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
 
       - name: 🏗 Install LibreOffice
         run: |

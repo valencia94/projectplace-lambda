@@ -174,7 +174,7 @@ def lambda_handler(event=None, context=None):
                             #project            = :project_val,
                             reported_time       = :reported_time,
                             lebel_id            = :label_id,
-                            due_date            = :due_date
+                            due_date            = :due_date,
                             comments            = :comments,
                             direct_url          = :direct_url,
                             is_done             = :is_done,

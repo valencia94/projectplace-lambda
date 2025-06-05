@@ -25,6 +25,7 @@ RUN pip3 install --upgrade pip && pip3 install -r requirements.txt
 
 # 6) Copy your Lambda code & logo
 COPY lambda_handler.py ./
+
 COPY logo/ ./logo/
 
 # 7) Lambda entry point

@@ -9,23 +9,6 @@ import numpy as np
 from datetime import datetime
 import subprocess  # <-- For running LibreOffice headless
 
-
-# ----------------------------------------------------------------------------
-# HELPER – Due-date parsing
-# ----------------------------------------------------------------------------
-
-def safe_parse_due(due_val):
-    """Parse ISO string or epoch seconds into YYYY-MM-DD; return blank on failure."""
-    if not due_val or (isinstance(due_val, float) and pd.isna(due_val)):
-        return ""
-    try:
-        return str(datetime.fromisoformat(str(due_val).replace("Z", "")).date())
-    except Exception:
-        pass
-    try:
-        return str(datetime.fromtimestamp(float(due_val)).date())
-    except Exception:
-        return str(due_val)
 import boto3
 from botocore.exceptions import ClientError
 from docx import Document
@@ -254,13 +237,6 @@ def generate_excel_report(token, projects):
                 cid = c.get("id")
 
                 cmts = fetch_comments_for_card(token, cid)
-                # Capture label_id
-                label_val = None
-                if "label_id" in c:
-                    label_val = c.get("label_id")
-                elif isinstance(c.get("labels"), list) and c["labels"]:
-                    label_val = c["labels"][0].get("id")
-                row["label_id"] = label_val
                 row["Comments"] = str(cmts)
 
                 row["project_id"] = pid
@@ -316,7 +292,6 @@ def store_in_dynamodb(df):
             "project_id": str(pid),
             "card_id": str(row.get("id","N/A")),
             "title": str(row.get("title","N/A")),
-                    "label_id": str(row.get("label_id","")),
             "timestamp": int(time.time())
         }
         table.put_item(Item=item)
@@ -433,9 +408,9 @@ def build_acta_for_project(pid, project_df):
 
 
 def add_project_status_table(doc, df):
-        df = df[df.get("label_id") != 0]
-        df = df[df.get("board_name","") != "COMPROMISOS"].copy()
-        df = df[~df["planlet_name"].isin(["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"])].copy()
+    df = df[df.get("board_name","") != "COMPROMISOS"].copy()
+    df = df[~df["planlet_name"].isin(["ASISTENCIA","ASISTENCIA CLIENTE","ASISTENCIA IKUSI"])].copy()
+
     table_data = []
     for _, row in df.iterrows():
         hito = str(row.get("planlet_name",""))
@@ -481,10 +456,8 @@ def add_project_status_table(doc, df):
             run.font.size = Pt(10)
             run.font.name = "Verdana"
 
-
 def add_commitments_table(doc, df):
-    """Build COMPROMISOS table from rows where label_id == 0 and column_id == 1."""
-    commits = df[(df.get("label_id") == 0) & (df.get("column_id") == 1)].copy()
+    commits = df[(df.get("board_name","") == "COMPROMISOS") & (df["column_id"] == 1)]
     if commits.empty:
         doc.add_paragraph("No commitments recorded.")
         return
@@ -497,9 +470,9 @@ def add_commitments_table(doc, df):
     hdr_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
     hdr_row.height = Inches(0.45)
 
-    table.columns[0].width = Inches(3.0)  # COMPROMISO
-    table.columns[1].width = Inches(4.0)  # RESPONSABLE
-    table.columns[2].width = Inches(3.0)  # FECHA
+    table.columns[0].width = Inches(3.0)
+    table.columns[1].width = Inches(4.0)
+    table.columns[2].width = Inches(3.0)
 
     col_headers = ["COMPROMISO", "RESPONSABLE", "FECHA"]
     hdr_cells = hdr_row.cells
@@ -510,17 +483,24 @@ def add_commitments_table(doc, df):
         run.bold = True
         run.font.size = Pt(12)
         run.font.name = "Verdana"
-        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
         shading_elm = OxmlElement("w:shd")
         shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
         hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
 
+    row_idx = 0
     for _, row in commits.iterrows():
         new_cells = table.add_row().cells
-        comp = str(row.get("title", ""))
-        responsible = str(row.get("comments_parsed", ""))
-        fecha = safe_parse_due(row.get("due_date"))
-        data_vals = [comp, responsible, fecha]
+
+        comp = str(row.get("title",""))
+        responsible = str(row.get("planlet_name",""))
+        last_comment = str(row.get("comments_parsed",""))
+
+        date_str = parse_comment_for_date(last_comment)
+        if not date_str.strip():
+            date_str = last_comment.strip("[]'\" ") or "N/A"
+
+        data_vals = [comp, responsible, date_str]
         for j, dv in enumerate(data_vals):
             new_cells[j].text = dv
             p = new_cells[j].paragraphs[0]
@@ -528,6 +508,7 @@ def add_commitments_table(doc, df):
             run = p.runs[0]
             run.font.size = Pt(10)
             run.font.name = "Verdana"
+
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")
     for fmt in ("%d/%m/%Y", "%m/%d/%Y"):

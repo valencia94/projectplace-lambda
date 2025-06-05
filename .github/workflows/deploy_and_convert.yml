@@ -28,18 +28,14 @@ jobs:
             703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
 
       - name: 🛠 Build and push Docker image to ECR
+        env:
+          IMAGE_TAG: 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
         run: |
-          docker build -t projectplace-lambda .
-          docker tag projectplace-lambda:latest \
-            703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
-          docker push 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
-
-      - name: 🚀 Update Lambda function code
-        run: |
-          aws lambda update-function-code \
-            --function-name ProjectPlaceDataExtractor \
-            --image-uri 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest \
-            --region us-east-2
+          # Force a clean rebuild (ignore all cached layers)
+          docker build --no-cache --pull -t projectplace-lambda .
+          # Tag & push
+          docker tag projectplace-lambda:latest $IMAGE_TAG
+          docker push $IMAGE_TAG
 
       - name: ⏳ Wait for Lambda code update to finish
         run: |

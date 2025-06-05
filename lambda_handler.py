@@ -487,8 +487,15 @@ def add_project_status_table(doc, df):
 
 
 def add_commitments_table(doc, df):
-    """Build COMPROMISOS table from rows where label_id == 0 and column_id == 1."""
-    commits = df[(df.get("label_id") == 0) & (df.get("column_id") == 1)].copy()
+    """Build COMPROMISOS table from rows where label_id == 0 and column_id == 1, or board_name is COMPROMISOS."""
+    # Ensure correct data types
+    df["label_id"] = pd.to_numeric(df["label_id"], errors="coerce")
+    df["column_id"] = pd.to_numeric(df["column_id"], errors="coerce")
+    # The filter: label_id==0 & column_id==1, OR board_name=="COMPROMISOS"
+    commits = df[
+        ((df["label_id"] == 0) & (df["column_id"] == 1)) |
+        (df.get("board_name", "") == "COMPROMISOS")
+    ].copy()
     if commits.empty:
         doc.add_paragraph("No commitments recorded.")
         return

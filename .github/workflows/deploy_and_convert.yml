@@ -27,22 +27,28 @@ jobs:
           docker login --username AWS --password-stdin \
             703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
 
-      - name: 🛠 Build and push Docker image to ECR
-        env:
-          IMAGE_TAG: 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest
+      - name: 🛠 Build (no-cache) and push Docker image to ECR
         run: |
-          # Force a clean rebuild (ignore all cached layers)
+          # 1️⃣ Force a clean rebuild (ignore ALL cached layers)
           docker build --no-cache --pull -t projectplace-lambda .
-          # Tag & push
+          # 2️⃣ Tag with full ECR URI
           docker tag projectplace-lambda:latest $IMAGE_TAG
+          # 3️⃣ Push
           docker push $IMAGE_TAG
-          
-      - name: 🚀 Update Lambda function code
+      # ─────────────────────────────────────────────────────────────
+
+      - name: 🚀 Update Lambda to latest image
         run: |
           aws lambda update-function-code \
             --function-name ProjectPlaceDataExtractor \
-            --image-uri 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda:latest \
-            --region us-east-2
+            --image-uri $IMAGE_TAG \
+            --region $AWS_REGION
+
+      # Optional smoke test (invoke once and tail logs)
+      - name: 🔎 One-shot Lambda invocation
+        run: |
+          aws lambda invoke --function-name ProjectPlaceDataExtractor --payload '{}' /tmp/out.json
+          echo "Payload →"; cat /tmp/out.json
 
       - name: ⏳ Wait for Lambda code update to finish
         run: |

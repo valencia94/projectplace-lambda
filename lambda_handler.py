@@ -877,4 +877,4 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
                 for run in para.runs:
                     run.font.name = "Verdana"
 
-    doc.add_paragraph()]
+    doc.add_paragraph()

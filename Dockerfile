@@ -1,27 +1,15 @@
-# ---------- base image -------------------------------------------------
-FROM python:3.10-slim
+# Use AWS’s official Lambda Python base image
+FROM public.ecr.aws/lambda/python:3.10
 
-# ---------- runtime flags ----------------------------------------------
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+# Copy your function code
+COPY lambda_handler.py ./
+COPY requirements.txt ./
 
-# ---------- working directory ------------------------------------------
-WORKDIR /app
+# Install your dependencies
+RUN pip3 install --no-cache-dir -r requirements.txt
 
-# ---------- system packages --------------------------------------------
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        libreoffice-core libreoffice-writer fonts-dejavu-core \
-    && rm -rf /var/lib/apt/lists/*
+# (Optionally) install other packages or libs, e.g., LibreOffice
 
-# ---------- Python deps -------------------------------------------------
-COPY requirements.txt .
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# ---------- application code -------------------------------------------
-COPY . .
-
-# ---------- container entry-point --------------------------------------
-CMD ["python", "lambda_handler.py"]
-
+# The last lines set the container’s startup instructions:
+ENTRYPOINT [ "/lambda-entrypoint.sh" ]
+CMD [ "lambda_handler.lambda_handler" ]

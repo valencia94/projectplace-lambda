@@ -1,28 +1,27 @@
-# Use a specific Python version compatible with NumPy 1.24.2
+# ---------- base image -------------------------------------------------
 FROM python:3.10-slim
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+# ---------- runtime flags ----------------------------------------------
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Set work directory
+# ---------- working directory ------------------------------------------
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
+# ---------- system packages --------------------------------------------
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libreoffice-core libreoffice-writer fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
-RUN pip install --upgrade pip
-
-# Copy requirements and install
+# ---------- Python deps -------------------------------------------------
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# ---------- application code -------------------------------------------
 COPY . .
 
-# Command to run on container start
+# ---------- container entry-point --------------------------------------
 CMD ["python", "lambda_handler.py"]
 

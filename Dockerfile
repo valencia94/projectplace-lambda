@@ -13,3 +13,4 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # The last lines set the container’s startup instructions:
 ENTRYPOINT [ "/lambda-entrypoint.sh" ]
 CMD [ "lambda_handler.lambda_handler" ]
+

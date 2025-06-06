@@ -618,7 +618,6 @@ def infer_content_type(s3_key):
     else:
         return "application/octet-stream"
 
-
 def set_document_margins_and_orientation(doc):
     section = doc.sections[0]
     section.orientation = WD_ORIENT.LANDSCAPE
@@ -629,38 +628,42 @@ def set_document_margins_and_orientation(doc):
     section.top_margin = Inches(0.5)
     section.bottom_margin = Inches(0.5)
 
-
 def add_page_x_of_y_footer(doc):
     section = doc.sections[0]
     footer_para = section.footer.paragraphs[0]
     footer_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
 
-    run = footer_para.add_run()
-    run.add_text("Page ")
+    # Start: "Page "
+    run = footer_para.add_run("Page ")
+    add_field(run, "PAGE")
 
-    fld_page = OxmlElement("w:fldSimple")
-    fld_page.set(qn("w:instr"), "PAGE")
-    r_page = OxmlElement("w:r")
-    r_pr_page = OxmlElement("w:rPr")
-    t_page = OxmlElement("w:t")
-    t_page.text = "1"
-    r_page.append(r_pr_page)
-    r_page.append(t_page)
-    fld_page.append(r_page)
-    run._r.append(fld_page)
+    # " of "
+    run = footer_para.add_run(" of ")
+    add_field(run, "NUMPAGES")
 
-    run.add_text(" of ")
+def add_field(run, field_code):
+    """
+    Insert a Word field, e.g. 'PAGE' or 'NUMPAGES', into a run.
+    """
+    fldChar_begin = OxmlElement('w:fldChar')
+    fldChar_begin.set(qn('w:fldCharType'), 'begin')
 
-    fld_pages = OxmlElement("w:fldSimple")
-    fld_pages.set(qn("w:instr"), "NUMPAGES")
-    r_pages = OxmlElement("w:r")
-    r_pr_pages = OxmlElement("w:rPr")
-    t_pages = OxmlElement("w:t")
-    t_pages.text = "1"
-    r_pages.append(r_pr_pages)
-    r_pages.append(t_pages)
-    fld_pages.append(r_pages)
-    run._r.append(fld_pages)
+    instrText = OxmlElement('w:instrText')
+    instrText.set(qn('xml:space'), 'preserve')
+    instrText.text = field_code
+
+    fldChar_separate = OxmlElement('w:fldChar')
+    fldChar_separate.set(qn('w:fldCharType'), 'separate')
+
+    # Mark field as "dirty" so Word updates it on open
+    dirty = OxmlElement('w:fldChar')
+    dirty.set(qn('w:fldCharType'), 'end')
+
+    # Append all
+    run._r.append(fldChar_begin)
+    run._r.append(instrText)
+    run._r.append(fldChar_separate)
+    run._r.append(dirty)
 
 
 def add_top_header_table(doc, main_title, logo_path=None):

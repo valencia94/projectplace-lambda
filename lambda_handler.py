@@ -535,17 +535,16 @@ def add_commitments_table(doc: Document, df: pd.DataFrame) -> None:
     
         if row.get("board_name") == "COMPROMISOS":
             # ── legacy mapping ───────────────────────────────────────────
-            comp  = str(row.get("title", ""))                 # Compromiso
+            comp  = str(row.get("title", ""))                 # CompromisoAdd commentMore actions
             resp  = str(row.get("planlet_name", ""))          # Responsable
-            raw_c = str(row.get("comments_parsed", ""))# date lives in last comment
+            raw_c = str(row.get("comments_parsed", ""))       # Fecha
             fecha = parse_comment_for_date(raw_c) or raw_c.strip("[]'\" ") or "N/A"
-    
-        elif pd.notna(row.get("label_id")) and int(row.get("label_id")) == 0:
-            # ── new mapping (label_id == 0) ──────────────────────────────
-            comp  = str(row.get("title", ""))          # COMPROMISO
-            resp  = str(row.get("comments_parsed", ""))# RESPONSABLE
-            fecha = safe_parse_due(row.get("due_date"))# FECHA
-    
+        else:
+            # new mapping (label_id == 0)
+            comp  = str(row.get("title", ""))                 # Compromiso 
+            resp  = str(row.get("comments_parsed", ""))       # Responsable  
+            fecha = safe_parse_due(row.get("due_date"))       # Fecha
+            
         else:
             # Row doesn’t match either style → remove the extra row & skip
             table._tbl.remove(new_cells[0]._tc)

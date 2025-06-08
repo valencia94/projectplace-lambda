@@ -535,16 +535,16 @@ def add_commitments_table(doc: Document, df: pd.DataFrame) -> None:
 
         if row.get("board_name") == "COMPROMISOS":
             # legacy mapping
-            comp  = str(row.get("title", ""))          # Compromiso
-            resp  = str(row.get("planlet_name", ""))                 # Responsable
-            raw_c = str(row.get("comments_parsed", ""))
+            comp  = str(row.get("title", ""))                 # Compromiso
+            resp  = str(row.get("planlet_name", ""))          # Responsable
+            raw_c = str(row.get("comments_parsed", ""))       # Fecha
             fecha = parse_comment_for_date(raw_c) or raw_c.strip("[]'\" ") or "N/A"
         else:
             # new mapping (label_id == 0)
-            comp  = str(row.get("title", ""))                 # Compromiso
-            resp  = str(row.get("comments_parsed", ""))       # Responsable
+            comp  = str(row.get("title", ""))                 # Compromiso 
+            resp  = str(row.get("comments_parsed", ""))       # Responsable  
             fecha = safe_parse_due(row.get("due_date"))       # Fecha
-
+            
         for cell, value in zip(new_cells, (comp, resp, fecha)):
             cell.text = value
             p = cell.paragraphs[0]

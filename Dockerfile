@@ -1,22 +1,35 @@
-# ----------------
-# Dockerfile
-# ----------------
-
+# ---------------------------------------------------------------------------
+# Base image: official AWS Lambda Python 3.10
+# ---------------------------------------------------------------------------
 FROM public.ecr.aws/lambda/python:3.10
 
-# (A) copy source
-COPY lambda_handler.py ./
-COPY requirements.txt ./
+# ---------------------------------------------------------------------------
+# System packages – LibreOffice (writer core) + basic fonts
+# ---------------------------------------------------------------------------
+RUN yum -y update && \
+    yum -y install \
+        libreoffice-core \
+        libreoffice-writer \
+        dejavu-sans-fonts  \
+    && yum clean all && rm -rf /var/cache/yum
 
-# 👉 (B) copy logo assets  ❗ NEW
+# ---------------------------------------------------------------------------
+# Python deps
+#  • awslambdaric = required entry point for Lambda container images
+# ---------------------------------------------------------------------------
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir --upgrade pip \
+ && pip3 install --no-cache-dir awslambdaric \
+ && pip3 install --no-cache-dir -r requirements.txt
+
+# ---------------------------------------------------------------------------
+# Your code & assets
+# ---------------------------------------------------------------------------
+COPY lambda_handler.py ./
 COPY logo/ ./logo/
 
-# (C) install deps
-RUN pip3 install --no-cache-dir -r requirements.txt
-
-# (optional) LibreOffice, etc.
-# RUN yum -y install libreoffice-headless
-
-# (D) Lambda start-up
-ENTRYPOINT ["/lambda-entrypoint.sh"]
+# ---------------------------------------------------------------------------
+# Lambda entry point
+# ---------------------------------------------------------------------------
+ENTRYPOINT ["/usr/bin/python3", "-m", "awslambdaric"]
 CMD ["lambda_handler.lambda_handler"]

@@ -1,34 +1,26 @@
-################  Lambda Python 3.10  ################
-FROM public.ecr.aws/lambda/python:3.10
+# ---------- base image -------------------------------------------------
+FROM python:3.10-slim
 
-# -------- 1. enable EPEL *without* amazon-linux-extras ----------
-# (The rpm lives under /7/Everything/ ; pin a known working version)
-RUN yum -y update && \
-    curl -SL -o /tmp/epel.rpm \
-         https://dl.fedoraproject.org/pub/epel/7/Everything/x86_64/Packages/e/epel-release-7-14.noarch.rpm && \
-    rpm -ivh /tmp/epel.rpm && rm -f /tmp/epel.rpm
+# ---------- runtime flags ----------------------------------------------
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# -------- 2. install LibreOffice headless variant + a font ------
-# --skip-broken lets the build survive if an optional lang-pack vanishes.
-RUN yum -y install libreoffice \
-                   libreoffice-core \
-                   libreoffice-writer \
-                   dejavu-sans-fonts \
-    --setopt=skip_missing_names_on_install=False \
-    --setopt=skip_broken=True && \
-    yum clean all && rm -rf /var/cache/yum
+# ---------- working directory ------------------------------------------
+WORKDIR /app
 
-# Good practice for LO inside Lambda (it writes to $HOME/.config)
-ENV HOME=/tmp
+# ---------- system packages --------------------------------------------
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libreoffice-core libreoffice-writer fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
 
-# -------- 3. Python deps ---------------------------------------
+# ---------- Python deps -------------------------------------------------
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir --upgrade pip \
- && pip3 install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# -------- 4. Your code & assets --------------------------------
-COPY lambda_handler.py .
-COPY logo/ ./logo/
+# ---------- application code -------------------------------------------
+COPY . .
 
-# Keep AWS’s ENTRYPOINT; just set the handler
-CMD ["lambda_handler.lambda_handler"]
+# ---------- container entry-point --------------------------------------
+CMD ["python", "lambda_handler.py"]

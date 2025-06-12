@@ -5,7 +5,7 @@ FROM public.ecr.aws/lambda/python:3.10
 RUN yum -y update && \
     yum -y install epel-release && \       # this works in the Lambda image
     # 2) install LibreOffice (headless) + a basic font
-    yum -y install libreoffice-headless dejavu-sans-fonts && \
+RUN yum -y install libreoffice-headless dejavu-sans-fonts && \
     yum clean all && rm -rf /var/cache/yum
 
 # ── python deps ────────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ import subprocess  # <-- For running LibreOffice headles
 
 
 # ----------------------------------------------------------------------------
-# HELPER – Due-date parsing
+# HELPER – Due-date parsing 
 # ----------------------------------------------------------------------------
 
 def safe_parse_due(due_val):

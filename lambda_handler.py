@@ -7,7 +7,7 @@ import ast
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import subprocess  # <-- For running LibreOffice headless
+import subprocess  # <-- For running LibreOffice headles
 
 
 # ----------------------------------------------------------------------------

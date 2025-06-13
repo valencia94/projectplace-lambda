@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-push:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -29,13 +29,12 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build Docker image for lambda
+      - name: Build Docker image for Lambda
         run: |
           docker build --platform linux/amd64 -t ${{ secrets.ECR_REPO }}:latest .
 
       - name: Push Docker image to ECR
         run: |
-          docker tag ${{ secrets.ECR_REPO }}:latest ${{ secrets.ECR_REPO }}:latest
           docker push ${{ secrets.ECR_REPO }}:latest
 
       - name: Update Lambda function code

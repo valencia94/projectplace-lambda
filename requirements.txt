@@ -1,12 +1,8 @@
-# requirements.txt
 requests==2.31.0
 boto3==1.34.89
 pandas==2.2.2
 numpy==1.26.4
 openpyxl==3.1.2
 python-docx==0.8.11
-
-# 🔒 Pin to wheel that exists for Lambda’s OS / Python 3.11
 lxml==4.9.2
-
 awslambdaric==2.0.1

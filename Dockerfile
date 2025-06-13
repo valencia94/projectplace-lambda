@@ -1,17 +1,19 @@
 ###############################################################################
-# ---------- Stage 0 : build Python wheels ------------------------------------
+# ---------- Stage 0 : build Python wheels  -----------------------------------
 ###############################################################################
 FROM public.ecr.aws/lambda/python:3.11 AS build
 
 COPY requirements.txt .
 
-# Ensure we ONLY install wheels (no source builds) and keep the cache tiny
-#   --prefer-binary      → choose wheels over sdists whenever possible
-#   --only-binary=:all:  → *require* a wheel; fail if only source is available
+# ① upgrade pip
+# ② install deps into /opt/python
+#    • --prefer-binary      → try wheels first
+#    • --only-binary=:all:  → require wheels
+#    • --no-binary=python-docx → *make an exception* for the one pure-python lib
 RUN python -m pip install --upgrade pip --no-cache-dir && \
-    python -m pip install --no-cache-dir --prefer-binary --only-binary=:all: \
+    python -m pip install --no-cache-dir \
+        --prefer-binary --only-binary=:all: --no-binary=python-docx \
         -r requirements.txt -t /opt/python
-
 
 ###############################################################################
 # ---------- Stage 1 : LibreOffice binaries + fonts ---------------------------

@@ -1,47 +1,38 @@
 name: build-push-update-lambda
-
 on:
   push:
     branches: [main]
     paths:
-      - "**/*.py"
+      - '**/*.py'
       - Dockerfile
       - requirements.txt
       - .github/workflows/deploy_and_convert.yml
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     env:
       AWS_REGION: us-east-2
-      ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}          # 703671891952
+      ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
       REPO_NAME: projectplace-lambda
       IMAGE_TAG: latest
-
     steps:
       - uses: actions/checkout@v4
-
-      #— secure short-lived creds (GitHub->AWS OIDC)
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-
       - name: Login to Amazon ECR
         run: |
-          aws ecr get-login-password --region $AWS_REGION |
+          aws ecr get-login-password --region $AWS_REGION | \
           docker login --username AWS --password-stdin \
-            $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-
-      - name: Build & push container
+          $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+      - name: Build & push image
         run: |
           docker buildx build \
             --platform linux/amd64 \
             --provenance=false --sbom=false \
             --push \
             -t $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO_NAME:$IMAGE_TAG .
-
       - name: Update Lambda code
         run: |
           aws lambda update-function-code \
@@ -51,8 +42,7 @@ jobs:
           aws lambda wait function-updated \
             --function-name ProjectPlaceDataExtractor \
             --region $AWS_REGION
-
-      - name: Fire and forget test invoke
+      - name: Async test invoke
         run: |
           aws lambda invoke \
             --function-name ProjectPlaceDataExtractor \

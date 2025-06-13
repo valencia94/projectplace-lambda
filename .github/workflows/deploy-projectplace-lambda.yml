@@ -11,8 +11,9 @@ on:
   workflow_dispatch:
 
 env:
-  ECR_REPOSITORY: projectplace-data-extractor
-  IMAGE_TAG: latest
+  # ─── real ECR repo name ───
+  ECR_REPOSITORY: projectplace-lambda          # << fixed
+  IMAGE_TAG:     latest
   LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor
 
 jobs:

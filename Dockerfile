@@ -4,12 +4,6 @@
 FROM public.ecr.aws/lambda/python:3.11 AS build
 
 COPY requirements.txt .
-
-# ① upgrade pip
-# ② install deps into /opt/python
-#    • --prefer-binary      → try wheels first
-#    • --only-binary=:all:  → require wheels
-#    • --no-binary=python-docx → *make an exception* for the one pure-python lib
 RUN python -m pip install --upgrade pip --no-cache-dir && \
     python -m pip install --no-cache-dir \
         --prefer-binary --only-binary=:all: --no-binary=python-docx \
@@ -19,13 +13,11 @@ RUN python -m pip install --upgrade pip --no-cache-dir && \
 # ---------- Stage 1 : LibreOffice binaries + fonts ---------------------------
 ###############################################################################
 FROM debian:bookworm-slim AS libre
-RUN set -e; \
-    apt-get update -qq; \
+RUN apt-get update -qq && \
     DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
         libreoffice-core libreoffice-writer fonts-dejavu-core && \
     rm -rf /var/lib/apt/lists/*
-
 
 ###############################################################################
 # ---------- Stage 2 : Final Lambda image -------------------------------------
@@ -41,8 +33,7 @@ COPY --from=libre /usr/share/fonts      /usr/share/fonts
 ENV PATH="/usr/lib/libreoffice/program:${PATH}"
 
 # ---------- your code --------------------------------------------------------
-COPY lambda_handler.py ${LAMBDA_TASK_ROOT}/
-COPY logo/             /app/logo/
+COPY . ${LAMBDA_TASK_ROOT}/
 
 # Lambda entrypoint
 CMD ["lambda_handler.lambda_handler"]

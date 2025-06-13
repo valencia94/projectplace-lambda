@@ -3,12 +3,12 @@ import json
 import time
 import logging
 import requests
+import pandas as pd
 from datetime import datetime
 import boto3
 from botocore.exceptions import ClientError
 import ast
 import subprocess
-import pandas as pd
 
 # ────────────────────────────────────────────────────────────────────
 # 1.  Lazy‑import the heavy libraries (pandas, numpy, python‑docx)

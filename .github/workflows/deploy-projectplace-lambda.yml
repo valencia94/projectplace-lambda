@@ -11,8 +11,8 @@ on:
   workflow_dispatch:
 
 env:
-  ECR_REPOSITORY: projectplace-lambda          # ← real repo
-  LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor
+  ECR_REPOSITORY: projectplace-lambda
+  LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor   # ← real Lambda name
 
 jobs:
   build_deploy:
@@ -22,7 +22,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
 
-    # ───────── AWS creds ─────────
+    # ---------- AWS credentials ----------
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
@@ -34,18 +34,19 @@ jobs:
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    # ───────── Build & push with UNIQUE TAG (commit SHA) ─────────
-    - name: Build & push image
+    # ---------- BUILD & PUSH (commit-SHA tag) ----------
+    - name: Build & push container image
       env:
         REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
         REPOSITORY: ${{ env.ECR_REPOSITORY }}
-        TAG:        ${{ github.sha }}          # ← immutable, unique
+        TAG:        ${{ github.sha }}        # ← immutable, unique
       run: |
-        echo "Building image $REGISTRY/$REPOSITORY:$TAG"
+        echo "::group::Docker build"
         docker build -t $REGISTRY/$REPOSITORY:$TAG .
-        docker push   $REGISTRY/$REPOSITORY:$TAG
+        echo "::endgroup::"
+        docker push $REGISTRY/$REPOSITORY:$TAG
 
-    # ───────── Update Lambda to new tag ─────────
+    # ---------- Update Lambda to the new image ----------
     - name: Update Lambda function code
       env:
         REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
@@ -53,11 +54,11 @@ jobs:
         TAG:        ${{ github.sha }}
       run: |
         aws lambda update-function-code \
-              --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
-              --image-uri "$REGISTRY/$REPOSITORY:$TAG"
+          --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
+          --image-uri "$REGISTRY/$REPOSITORY:$TAG"
 
-    # ───────── Optional smoke test ─────────
-    - name: Smoke-test invoke
+    # ---------- Optional smoke-test ----------
+    - name: Smoke test invoke
       run: |
         aws lambda invoke --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
                           --cli-binary-format raw-in-base64-out \

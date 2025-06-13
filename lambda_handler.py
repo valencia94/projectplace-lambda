@@ -151,7 +151,6 @@ def get_robot_access_token(client_id, client_secret):
 # Enterprise Projects
 # ------------------------------------------------------------------------------
 def get_all_account_projects(token, include_archived=False):
-    """Return list of enterprise projects (optionally incl. archived)."""
     url = f"{PROJECTPLACE_API_URL}/1/account/projects"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -203,7 +202,6 @@ def generate_excel_report(token, projects):
                 row = dict(c)
                 cid = c.get("id")
                 cmts = fetch_comments_for_card(token, cid)
-                # Capture label_id
                 label_val = None
                 if "label_id" in c:
                     label_val = c.get("label_id")
@@ -354,162 +352,28 @@ def build_acta_for_project(pid, df_proj):
     logger.info(f"Created doc {path}")
     return path
 
-# =========== Insert your docx table-building helpers below as in prior scripts ============
-# (add_project_status_table, add_commitments_table, parse_comment_for_date, add_asistencia_table,
-# add_section_header, add_horizontal_rule, shade_cell, add_unified_visual_header, etc.)
-# Keep as in your latest working script!
-
-# ------------------------------------------------------------------------------
-# S3 Upload & PDF Conversion
-# ------------------------------------------------------------------------------
-def upload_file_to_s3(path, key):
-    s3 = boto3.client("s3", region_name=REGION)
-    try:
-        s3.upload_file(
-            Filename=path,
-            Bucket=S3_BUCKET,
-            Key=key,
-            ExtraArgs={
-                "ContentType": infer_content_type(key),
-                "ContentDisposition": f'attachment; filename="{os.path.basename(key)}"',
-            },
-        )
-        logger.info(f"Uploaded {path} → s3://{S3_BUCKET}/{key}")
-    except Exception as exc:
-        logger.error(f"S3 upload failed: {exc}")
-
-def convert_docx_to_pdf(doc_path):
-    if not os.path.exists(doc_path):
-        raise FileNotFoundError(doc_path)
-    cmd = [
-        "libreoffice",
-        "--headless",
-        "--convert-to",
-        "pdf",
-        doc_path,
-        "--outdir",
-        os.path.dirname(doc_path),
-    ]
-    subprocess.run(cmd, check=True)
-    pdf = doc_path.replace(".docx", ".pdf")
-    if not os.path.exists(pdf):
-        raise FileNotFoundError(pdf)
-    return pdf
-
-def infer_content_type(key):
-    lower = key.lower()
-    if lower.endswith(".docx"):
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    if lower.endswith(".xlsx"):
-        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    if lower.endswith(".pdf"):
-        return "application/pdf"
-    return "application/octet-stream"
-
-def set_document_margins_and_orientation(doc):
-    section = doc.sections[0]
-    section.orientation = WD_ORIENT.LANDSCAPE
-    section.page_width = Inches(11)
-    section.page_height = Inches(8.5)
-    section.left_margin = section.right_margin = Inches(0.5)
-    section.top_margin = section.bottom_margin = Inches(0.5)
-
-def add_page_x_of_y_footer(doc):
-    section = doc.sections[0]
-    p = section.footer.paragraphs[0]
-    p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    _insert_field(p.add_run("Page "), "PAGE")
-    p.add_run(" of ")
-    _insert_field(p.add_run(), "NUMPAGES")
-
-def _insert_field(run, fld):
-    begin = OxmlElement("w:fldChar"); begin.set(qn("w:fldCharType"), "begin")
-    instr = OxmlElement("w:instrText"); instr.set(qn("xml:space"), "preserve"); instr.text = fld
-    sep = OxmlElement("w:fldChar"); sep.set(qn("w:fldCharType"), "separate")
-    end = OxmlElement("w:fldChar"); end.set(qn("w:fldCharType"), "end")
-    for el in (begin, instr, sep, end):
-        run._r.append(el)
-
-# ----------------------------------------------------------------------------
-# 6) BUILD ACTA => includes COMPROMISOS
-# ----------------------------------------------------------------------------
-def build_acta_for_project(pid, project_df):
-    if project_df.empty:
-        return None
-
-    if "wbs_tuple" in project_df.columns:
-        project_df = project_df.sort_values("wbs_tuple", ascending=True)
-
-    first_row = project_df.iloc[0]
-    project_name = str(first_row.get("project_name","Unknown Project"))
-    leader_name = str(first_row.get("creator_name","N/A"))
-
-    doc = Document()
-    set_document_margins_and_orientation(doc)
-    add_page_x_of_y_footer(doc)
-
-    add_unified_visual_header(doc, "ACTA DE SEGUIMIENTO", LOGO_IMAGE_PATH)  # 👈 Adds legal fields as shown in client doc
-    doc.add_paragraph()
-
-    date_now = datetime.now().strftime("%m/%d/%Y")
-    date_text = f"FECHA DEL ACTA: {date_now}"
-    add_two_by_two_table(doc, date_text, project_name, str(pid), leader_name, shade_color=LIGHT_SHADE_2X2)
-
-    doc.add_paragraph()
-    add_asistencia_table(doc, project_df)
-
-    doc.add_paragraph()
-    add_horizontal_rule(doc)
-    doc.add_paragraph()
-
-    add_section_header(doc, "ESTADO DEL PROYECTO Y COMENTARIOS")
-    add_project_status_table(doc, project_df)
-
-    doc.add_paragraph()
-    add_horizontal_rule(doc)
-    doc.add_paragraph()
-
-    add_section_header(doc, "COMPROMISOS")
-    add_commitments_table(doc, project_df)
-    doc.add_paragraph()
-
-    safe_proj_name = project_name.replace(" ", "_").replace("/", "_")
-    doc_path = f"/tmp/Acta_{safe_proj_name}_{pid}.docx"
-    doc.save(doc_path)
-    logger.info(f"Created doc => {doc_path}")
-    return doc_path
-
 def add_project_status_table(doc, df):
-    # --- filter rows ---------------------------------------------------
     df = df[df["label_id"] != 0]
     df = df[df.get("board_name", "") != "COMPROMISOS"].copy()
     df = df[~df["planlet_name"].isin(
         ["ASISTENCIA", "ASISTENCIA CLIENTE", "ASISTENCIA IKUSI"]
     )].copy()
-
-    # --- collect rows for the table -----------------------------------
     table_data = []
     for _, row in df.iterrows():
         hito        = str(row.get("planlet_name", ""))
         actividades = str(row.get("title", ""))
         desarrollo  = str(row.get("comments_parsed", ""))
         table_data.append([hito, actividades, desarrollo])
-
-    # --- build the actual Word table (one-time) ------------------------
     table = doc.add_table(rows=1, cols=3)
     table.style  = "Table Grid"
     table.autofit = False
-
     hdr_row = table.rows[0]
     hdr_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
     hdr_row.height      = Inches(0.45)
-
     table.columns[0].width = Inches(2.5)
     table.columns[1].width = Inches(2.5)
     table.columns[2].width = Inches(5.0)
-
-    # CHANGED: "HITO" => "HITO/TEMA"
-    headers = ["HITO/TEMA", "ACTIVIDADES", "DESARROLLO"]  # <--- CHANGED
+    headers = ["HITO/TEMA", "ACTIVIDADES", "DESARROLLO"]
     hdr_cells = hdr_row.cells
     for i, hdr_text in enumerate(headers):
         hdr_cells[i].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
@@ -519,11 +383,9 @@ def add_project_status_table(doc, df):
         run.font.size = Pt(14)
         run.font.name = "Verdana"
         run.font.color.rgb = RGBColor(0xFF,0xFF,0xFF)
-
         shading_elm = OxmlElement("w:shd")
         shading_elm.set(qn("w:fill"), BRAND_COLOR_HEADER)
         hdr_cells[i]._element.get_or_add_tcPr().append(shading_elm)
-
     for row_idx, row_data in enumerate(table_data):
         new_cells = table.add_row().cells
         for col_idx, val in enumerate(row_data):
@@ -533,43 +395,8 @@ def add_project_status_table(doc, df):
             run.font.size = Pt(10)
             run.font.name = "Verdana"
 
-
 def add_commitments_table(doc: Document, df: pd.DataFrame) -> None:
-    """
-    Build the COMPROMISOS table.
-
-    • New logic:   label_id == 0  AND column_id == 1
-    • Legacy:      board_name == "COMPROMISOS"     (column_id may be NaN)
-    """
-
-    # --- ensure numeric types so == works ---------------------------------
-    for _, row in commits.iterrows():
-        new_cells = table.add_row().cells
-    
-        if row.get("board_name") == "COMPROMISOS":
-            comp  = str(row.get("title", ""))
-            resp  = str(row.get("planlet_name", ""))
-            raw_c = str(row.get("comments_parsed", ""))
-            fecha = parse_comment_for_date(raw_c) or raw_c.strip("[]'\" ") or "N/A"
-    
-        elif row.get("label_id") == 0 and row.get("column_id") == 1:
-            comp  = str(row.get("title", ""))
-            resp  = str(row.get("comments_parsed", ""))
-            fecha = safe_parse_due(row.get("due_date"))
-    
-        else:
-            table._tbl.remove(new_cells[0]._tc)
-            continue
-    
-        for cell, value in zip(new_cells, (comp, resp, fecha)):
-            cell.text = value
-            p = cell.paragraphs[0]
-            p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-            run = p.runs[0]
-            run.font.size = Pt(10)
-            run.font.name = "Verdana"
-
-    # --- Word table header -------------------------------------------------
+    # Prep table
     table = doc.add_table(rows=1, cols=3)
     table.style  = "Table Grid"
     table.autofit = False
@@ -580,44 +407,44 @@ def add_commitments_table(doc: Document, df: pd.DataFrame) -> None:
     table.columns[1].width = Inches(4.0)   # RESPONSABLE
     table.columns[2].width = Inches(3.0)   # FECHA
 
-    for i, text in enumerate(("COMPROMISO", "RESPONSABLE", "FECHA")):
+    headers = ["COMPROMISO", "RESPONSABLE", "FECHA"]
+    for i, text in enumerate(headers):
         cell = hdr_row.cells[i]
         cell.paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
         cell.text = text
         run = cell.paragraphs[0].runs[0]
-        run.bold, run.font.size, run.font.name = True, Pt(12), "Verdana"
+        run.bold = True
+        run.font.size = Pt(12)
+        run.font.name = "Verdana"
         run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
         shd = OxmlElement("w:shd")
         shd.set(qn("w:fill"), BRAND_COLOR_HEADER)
         cell._element.get_or_add_tcPr().append(shd)
 
-    # --- data rows ---------------------------------------------------------
-    for _, row in commits.iterrows():
+    # Data rows
+    for _, row in df.iterrows():
+        use_legacy = row.get("board_name") == "COMPROMISOS"
+        use_new = row.get("label_id") == 0 and row.get("column_id") == 1
+        if not (use_legacy or use_new):
+            continue
         new_cells = table.add_row().cells
-    
-        if row.get("board_name") == "COMPROMISOS":
-            # ── legacy mapping ───────────────────────────────────────────
-            comp  = str(row.get("title", ""))                 # CompromisoAdd commentMore actions
-            resp  = str(row.get("planlet_name", ""))          # Responsable
-            raw_c = str(row.get("comments_parsed", ""))       # Fecha
+        if use_legacy:
+            comp  = str(row.get("title", ""))
+            resp  = str(row.get("planlet_name", ""))
+            raw_c = str(row.get("comments_parsed", ""))
             fecha = parse_comment_for_date(raw_c) or raw_c.strip("[]'\" ") or "N/A"
         else:
-            # new mapping (label_id == 0)
-            comp  = str(row.get("title", ""))                 # Compromiso 
-            resp  = str(row.get("comments_parsed", ""))       # Responsable  
-            fecha = safe_parse_due(row.get("due_date"))       # Fecha
-            
-        else:
-            # Row doesn’t match either style → remove the extra row & skip
-            table._tbl.remove(new_cells[0]._tc)
-            continue
+            comp  = str(row.get("title", ""))
+            resp  = str(row.get("comments_parsed", ""))
+            fecha = safe_parse_due(row.get("due_date"))
         for cell, value in zip(new_cells, (comp, resp, fecha)):
             cell.text = value
             p = cell.paragraphs[0]
             p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
             run = p.runs[0]
-            run.font.size, run.font.name = Pt(10), "Verdana"
-            
+            run.font.size = Pt(10)
+            run.font.name = "Verdana"
+
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")
     for fmt in ("%d/%m/%Y", "%m/%d/%Y"):
@@ -628,218 +455,25 @@ def parse_comment_for_date(comment_text):
             pass
     return ""
 
-# ----------------------------------------------------------------------------
-# S3 & HELPER FUNCS
-# ----------------------------------------------------------------------------
-def upload_file_to_s3(file_path, s3_key):
-    """
-    Upload with ContentType and ContentDisposition so that direct S3
-    console downloads preserve the docx or xlsx properly.
-    """
-    s3 = boto3.client("s3", region_name=REGION)
-    content_type = infer_content_type(s3_key)
-    disposition = f'attachment; filename="{os.path.basename(s3_key)}"'
-
+def safe_parse_due(raw_due):
     try:
-        s3.upload_file(
-            Filename=file_path,
-            Bucket=S3_BUCKET,
-            Key=s3_key,
-            ExtraArgs={
-                "ContentType": content_type,
-                "ContentDisposition": disposition
-            }
-        )
-        logger.info(f"✅ Uploaded {file_path} => s3://{S3_BUCKET}/{s3_key}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ S3 upload error: {str(e)}")
-        return False
-
-
-def convert_docx_to_pdf(doc_path):
-    """
-    Uses LibreOffice in headless mode to convert a .docx -> .pdf
-    E.g. doc_path=/tmp/Acta_Project123.docx
-    Output => /tmp/Acta_Project123.pdf
-    """
-    if not os.path.exists(doc_path):
-        raise FileNotFoundError(f"Docx not found: {doc_path}")
-
-    output_dir = os.path.dirname(doc_path)
-    # LibreOffice command => `libreoffice --headless --convert-to pdf input.docx --outdir /tmp`
-    cmd = [
-        "libreoffice",
-        "--headless",
-        "--convert-to",
-        "pdf",
-        doc_path,
-        "--outdir",
-        output_dir
-    ]
-    subprocess.run(cmd, check=True)  # Raises CalledProcessError if fail
-
-    pdf_path = doc_path.replace(".docx", ".pdf")
-    if not os.path.exists(pdf_path):
-        raise FileNotFoundError(f"PDF not found after conversion: {pdf_path}")
-
-    logger.info(f"PDF created => {pdf_path}")
-    return pdf_path
-
-
-def infer_content_type(s3_key):
-    if s3_key.lower().endswith(".docx"):
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    elif s3_key.lower().endswith(".xlsx"):
-        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    elif s3_key.lower().endswith(".pdf"):
-        return "application/pdf"
-    else:
-        return "application/octet-stream"
-
-def set_document_margins_and_orientation(doc):
-    section = doc.sections[0]
-    section.orientation = WD_ORIENT.LANDSCAPE
-    section.page_width = Inches(11)
-    section.page_height = Inches(8.5)
-    section.left_margin = Inches(0.5)
-    section.right_margin = Inches(0.5)
-    section.top_margin = Inches(0.5)
-    section.bottom_margin = Inches(0.5)
-
-def add_page_x_of_y_footer(doc):
-    section = doc.sections[0]
-    footer_para = section.footer.paragraphs[0]
-    footer_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-
-    # Start: "Page "
-    run = footer_para.add_run("Page ")
-    add_field(run, "PAGE")
-
-    # " of "
-    run = footer_para.add_run(" of ")
-    add_field(run, "NUMPAGES")
-
-def add_field(run, field_code):
-    """
-    Insert a Word field, e.g. 'PAGE' or 'NUMPAGES', into a run.
-    """
-    fldChar_begin = OxmlElement('w:fldChar')
-    fldChar_begin.set(qn('w:fldCharType'), 'begin')
-
-    instrText = OxmlElement('w:instrText')
-    instrText.set(qn('xml:space'), 'preserve')
-    instrText.text = field_code
-
-    fldChar_separate = OxmlElement('w:fldChar')
-    fldChar_separate.set(qn('w:fldCharType'), 'separate')
-
-    # Mark field as "dirty" so Word updates it on open
-    dirty = OxmlElement('w:fldChar')
-    dirty.set(qn('w:fldCharType'), 'end')
-
-    # Append all
-    run._r.append(fldChar_begin)
-    run._r.append(instrText)
-    run._r.append(fldChar_separate)
-    run._r.append(dirty)
-
-
-def add_top_header_table(doc, main_title, logo_path=None):
-    """
-    2 columns => each 5.0"
-    Title => left col, optional logo => right col
-    """
-    table = doc.add_table(rows=1, cols=2)
-    table.style = "Table Grid"
-    table.autofit = False
-
-    table.columns[0].width = Inches(5.0)
-    table.columns[1].width = Inches(5.0)
-
-    left_cell = table.cell(0,0)
-    p_left = left_cell.paragraphs[0]
-    run_left = p_left.add_run(main_title)
-    run_left.bold = True
-    run_left.font.size = Pt(30)
-    run_left.font.name = "Verdana"
-
-    right_cell = table.cell(0,1)
-    p_right = right_cell.paragraphs[0]
-    p_right.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
-
-    if logo_path and os.path.exists(logo_path):
-        run_logo = p_right.add_run()
-        run_logo.add_picture(logo_path, width=Inches(3.0))
-    else:
-        fallback_run = p_right.add_run("[INSERT COMPANY LOGO HERE]")
-        fallback_run.bold = True
-        fallback_run.font.size = Pt(12)
-
-
-def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, shade_color=None):
-    """
-    2x2 => (FECHA DEL ACTA, PROYECTO) / (NO. PROYECTO, PROJECT MANAGER)
-    """
-    table = doc.add_table(rows=2, cols=2)
-    table.style = "Table Grid"
-    table.autofit = False
-
-    table.columns[0].width = Inches(5.0)
-    table.columns[1].width = Inches(5.0)
-
-    # row0 col0 => FECHA DEL ACTA
-    c_0_0 = table.cell(0,0)
-    r_0_0 = c_0_0.paragraphs[0].add_run(date_text)
-    r_0_0.font.size = Pt(12)
-    r_0_0.bold = True
-    if shade_color:
-        shade_cell(c_0_0, shade_color)
-
-    # row0 col1 => PROYECTO
-    c_0_1 = table.cell(0,1)
-    r_0_1 = c_0_1.paragraphs[0].add_run(f"PROYECTO  {project_name}")
-    r_0_1.font.size = Pt(12)
-    r_0_1.bold = True
-    if shade_color:
-        shade_cell(c_0_1, shade_color)
-
-    # row1 col0 => NO. PROYECTO
-    c_1_0 = table.cell(1,0)
-    r_1_0 = c_1_0.paragraphs[0].add_run(f"NO. DE PROYECTO  {project_id}")
-    r_1_0.font.size = Pt(12)
-    r_1_0.bold = True
-    if shade_color:
-        shade_cell(c_1_0, shade_color)
-
-    # row1 col1 => PROJECT MANAGER
-    c_1_1 = table.cell(1,1)
-    r_1_1 = c_1_1.paragraphs[0].add_run(f"PROJECT MANAGER  {leader_name}")
-    r_1_1.font.size = Pt(12)
-    r_1_1.bold = True
-    if shade_color:
-        shade_cell(c_1_1, shade_color)
-
+        if pd.notna(raw_due) and str(raw_due).strip():
+            dt = pd.to_datetime(raw_due)
+            return dt.strftime("%Y-%m-%d")
+    except:
+        pass
+    return "N/A"
 
 def add_asistencia_table(doc, df):
-    """
-    2x2 => row0 col0 => "ASISTENCIA", row0 col1 => "ASISTENCIA CLIENTE"
-            row1 col0 => planlet_name="ASISTENCIA"
-            row1 col1 => planlet_name="ASISTENCIA CLIENTE"
-    """
     table = doc.add_table(rows=2, cols=2)
     table.style = "Table Grid"
     table.autofit = False
     table.columns[0].width = Inches(5.0)
     table.columns[1].width = Inches(5.0)
-
-    # row0 => Headers
     hdr_row = table.rows[0]
     hdr_cells = hdr_row.cells
-
-    # CHANGED: "ASISTENCIA" → "ASISTENCIA CLIENTE"
     hdr_cells[0].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    hdr_cells[0].text = "ASISTENCIA IKUSI"  # <--- CHANGED
+    hdr_cells[0].text = "ASISTENCIA IKUSI"
     run0 = hdr_cells[0].paragraphs[0].runs[0]
     run0.bold = True
     run0.font.size = Pt(14)
@@ -848,7 +482,6 @@ def add_asistencia_table(doc, df):
     shading_elm0 = OxmlElement("w:shd")
     shading_elm0.set(qn("w:fill"), BRAND_COLOR_HEADER)
     hdr_cells[0]._element.get_or_add_tcPr().append(shading_elm0)
-
     hdr_cells[1].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     hdr_cells[1].text = "ASISTENCIA CLIENTE"
     run1 = hdr_cells[1].paragraphs[0].runs[0]
@@ -859,30 +492,23 @@ def add_asistencia_table(doc, df):
     shading_elm1 = OxmlElement("w:shd")
     shading_elm1.set(qn("w:fill"), BRAND_COLOR_HEADER)
     hdr_cells[1]._element.get_or_add_tcPr().append(shading_elm1)
-
-    # row1 => data from planlet_name= "ASISTENCIA" & planlet_name= "ASISTENCIA CLIENTE"
     row_asist = df[(df["planlet_name"]=="ASISTENCIA") & (df["column_id"]==1)]
     text_asist = ""
     if not row_asist.empty:
         text_asist = str(row_asist.iloc[0].get("comments_parsed",""))
-
     row_asist_cliente = df[(df["planlet_name"]=="ASISTENCIA CLIENTE") & (df["column_id"]==1)]
     text_asist_cliente = ""
     if not row_asist_cliente.empty:
         text_asist_cliente = str(row_asist_cliente.iloc[0].get("comments_parsed",""))
-
     data_row = table.rows[1].cells
     data_row[0].text = text_asist
     data_row[1].text = text_asist_cliente
-
-    # style
     for col_idx in range(2):
         p = data_row[col_idx].paragraphs[0]
         p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
         run_data = p.runs[0]
         run_data.font.size = Pt(10)
         run_data.font.name = "Verdana"
-
 
 def add_section_header(doc, header_text):
     p = doc.add_paragraph()
@@ -893,13 +519,11 @@ def add_section_header(doc, header_text):
     run_h.font.name = "Verdana"
     doc.add_paragraph()
 
-
 def add_horizontal_rule(doc):
     line_para = doc.add_paragraph()
     line_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
     run = line_para.add_run("_______________________________________________________________")
     run.font.size = Pt(12)
-
 
 def shade_cell(cell, color):
     shade_elm = OxmlElement("w:shd")
@@ -907,30 +531,19 @@ def shade_cell(cell, color):
     cell._element.get_or_add_tcPr().append(shade_elm)
 
 def add_unified_visual_header(doc, main_title, logo_path=None):
-    """
-    Final design per visual spec:
-    - Merge cell(0,0) + cell(1,0) for the logo (vertical span)
-    - Merge cell(0,1) + cell(0,2) for centered title
-    - Row 2: metadata fields left-to-right
-    """
     table = doc.add_table(rows=2, cols=4)
     table.style = "Table Grid"
     table.autofit = False
-
-    table.columns[0].width = Inches(2.5)  # Logo
-    table.columns[1].width = Inches(2.5)  # Title
-    table.columns[2].width = Inches(2.0)  # Spacer
-    table.columns[3].width = Inches(3.0)  # Code block
-
-    # Merge for logo vertical (row 0 & 1 col 0)
+    table.columns[0].width = Inches(2.5)
+    table.columns[1].width = Inches(2.5)
+    table.columns[2].width = Inches(2.0)
+    table.columns[3].width = Inches(3.0)
     logo_cell = table.cell(0, 0).merge(table.cell(1, 0))
     if logo_path and os.path.exists(logo_path):
         run_logo = logo_cell.paragraphs[0].add_run()
         run_logo.add_picture(logo_path, width=Inches(2.0))
     else:
         logo_cell.text = "LOGO"
-
-    # Merge for ACTA title (row 0 col 1+2)
     title_cell = table.cell(0, 1).merge(table.cell(0, 2))
     para_title = title_cell.paragraphs[0]
     para_title.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
@@ -938,19 +551,13 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
     run_title.bold = True
     run_title.font.size = Pt(20)
     run_title.font.name = "Verdana"
-
-    # Código and Fecha cell (row 0 col 3)
     code_para = table.cell(0, 3).paragraphs[0]
     run_code = code_para.add_run("Código: GP-F-004\nFecha: 13-02-2020")
     run_code.font.size = Pt(10)
     run_code.font.name = "Verdana"
-
-    # Row 2 metadata
     table.cell(1, 1).text = "Revisó: Gerente de Operaciones"
     table.cell(1, 2).text = "Aprobó: Gestión Documental"
     table.cell(1, 3).text = "Versión: 2"
-
-    # Apply formatting
     for row in table.rows:
         for cell in row.cells:
             cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
@@ -958,5 +565,39 @@ def add_unified_visual_header(doc, main_title, logo_path=None):
                 para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
                 for run in para.runs:
                     run.font.name = "Verdana"
-
     doc.add_paragraph()
+
+def add_two_by_two_table(doc, date_text, project_name, project_id, leader_name, shade_color=None):
+    table = doc.add_table(rows=2, cols=2)
+    table.style = "Table Grid"
+    table.autofit = False
+    table.columns[0].width = Inches(5.0)
+    table.columns[1].width = Inches(5.0)
+    c_0_0 = table.cell(0,0)
+    r_0_0 = c_0_0.paragraphs[0].add_run(date_text)
+    r_0_0.font.size = Pt(12)
+    r_0_0.bold = True
+    if shade_color:
+        shade_cell(c_0_0, shade_color)
+    c_0_1 = table.cell(0,1)
+    r_0_1 = c_0_1.paragraphs[0].add_run(f"PROYECTO  {project_name}")
+    r_0_1.font.size = Pt(12)
+    r_0_1.bold = True
+    if shade_color:
+        shade_cell(c_0_1, shade_color)
+    c_1_0 = table.cell(1,0)
+    r_1_0 = c_1_0.paragraphs[0].add_run(f"NO. DE PROYECTO  {project_id}")
+    r_1_0.font.size = Pt(12)
+    r_1_0.bold = True
+    if shade_color:
+        shade_cell(c_1_0, shade_color)
+    c_1_1 = table.cell(1,1)
+    r_1_1 = c_1_1.paragraphs[0].add_run(f"PROJECT MANAGER  {leader_name}")
+    r_1_1.font.size = Pt(12)
+    r_1_1.bold = True
+    if shade_color:
+        shade_cell(c_1_1, shade_color)
+
+def set_document_margins_and_orientation(doc):
+    section = doc.sections
+

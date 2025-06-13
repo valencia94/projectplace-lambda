@@ -1,54 +1,66 @@
-name: Deploy ProjectPlace Lambda
+name: Build & Deploy – ProjectPlaceDataExtractor
 
 on:
   push:
+    branches: [ main ]
     paths:
-      - 'lambda_handler.py'
-      - 'requirements.txt'
       - 'Dockerfile'
+      - 'requirements.txt'
+      - 'lambda_handler.py'
       - '.github/workflows/deploy-projectplace-lambda.yml'
-      - 'logo/**'
   workflow_dispatch:
 
+env:
+  ECR_REPOSITORY: projectplace-lambda
+  LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor   # ← real Lambda name
+
 jobs:
-  build-and-push:
+  build_deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v3
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-2
+    # ---------- AWS credentials ----------
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region:            ${{ secrets.AWS_REGION }}
 
-      - name: Set environment variables
-        run: echo "ECR_REPO=${{ secrets.ECR_REPO }}" >> $GITHUB_ENV
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Cache Docker layers
-        uses: actions/cache@v3
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-docker-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-docker-
+    # ---------- BUILD & PUSH (commit-SHA tag) ----------
+    - name: Build & push container image
+      env:
+        REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
+        REPOSITORY: ${{ env.ECR_REPOSITORY }}
+        TAG:        ${{ github.sha }}        # ← immutable, unique
+      run: |
+        echo "::group::Docker build"
+        docker build -t $REGISTRY/$REPOSITORY:$TAG .
+        echo "::endgroup::"
+        docker push $REGISTRY/$REPOSITORY:$TAG
 
-      - name: Build Docker image for lambda
-        run: |
-          docker build --cache-from=type=local,src=/tmp/.buildx-cache \
-                       --cache-to=type=local,dest=/tmp/.buildx-cache \
-                       -t $ECR_REPO:latest .
+    # ---------- Update Lambda to the new image ----------
+    - name: Update Lambda function code
+      env:
+        REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
+        REPOSITORY: ${{ env.ECR_REPOSITORY }}
+        TAG:        ${{ github.sha }}
+      run: |
+        aws lambda update-function-code \
+          --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
+          --image-uri "$REGISTRY/$REPOSITORY:$TAG"
 
-      - name: Push Docker image to ECR
-        run: |
-          docker push $ECR_REPO:latest
-
-      - name: Update Lambda function code
-        run: |
-          aws lambda update-function-code \
-            --function-name projectplace-lambda \
-            --image-uri $ECR_REPO:latest \
-            --region us-east-2
+    # ---------- Optional smoke-test ----------
+    - name: Smoke test invoke
+      run: |
+        aws lambda invoke --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
+                          --cli-binary-format raw-in-base64-out \
+                          --payload '{}' response.json
+        cat response.json

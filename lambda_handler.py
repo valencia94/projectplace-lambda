@@ -537,30 +537,61 @@ def add_project_status_table(doc, df):
 def add_commitments_table(doc: Document, df: pd.DataFrame) -> None:
     """
     Build the COMPROMISOS table.
-
     • New logic:   label_id == 0  AND column_id == 1
     • Legacy:      board_name == "COMPROMISOS"     (column_id may be NaN)
     """
+    # --- Word table header -------------------------------------------------
+    table = doc.add_table(rows=1, cols=3)
+    table.style  = "Table Grid"
+    table.autofit = False
+    hdr_row = table.rows[0]
+    hdr_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+    hdr_row.height      = Inches(0.45)
+    table.columns[0].width = Inches(3.0)   # COMPROMISO
+    table.columns[1].width = Inches(4.0)   # RESPONSABLE
+    table.columns[2].width = Inches(3.0)   # FECHA
 
-    # --- ensure numeric types so == works ---------------------------------
+    # Header formatting
+    headers = ["COMPROMISO", "RESPONSABLE", "FECHA"]
+    for i, text in enumerate(headers):
+        cell = hdr_row.cells[i]
+        cell.paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        cell.text = text
+        run = cell.paragraphs[0].runs[0]
+        run.bold = True
+        run.font.size = Pt(12)
+        run.font.name = "Verdana"
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:fill"), BRAND_COLOR_HEADER)
+        cell._element.get_or_add_tcPr().append(shd)
+
+    # --- data rows ---------------------------------------------------------
+    # filter for legacy and new mapping
+    commits = df[
+        ((df.get("board_name", "") == "COMPROMISOS") |
+         ((df.get("label_id") == 0) & (df.get("column_id") == 1)))
+    ]
+
     for _, row in commits.iterrows():
         new_cells = table.add_row().cells
-    
         if row.get("board_name") == "COMPROMISOS":
-            comp  = str(row.get("title", ""))
-            resp  = str(row.get("planlet_name", ""))
-            raw_c = str(row.get("comments_parsed", ""))
+            # ── legacy mapping ───────────────────────────────────────────
+            comp  = str(row.get("title", ""))                 # Compromiso
+            resp  = str(row.get("planlet_name", ""))          # Responsable
+            raw_c = str(row.get("comments_parsed", ""))       # Fecha
             fecha = parse_comment_for_date(raw_c) or raw_c.strip("[]'\" ") or "N/A"
-    
-        elif row.get("label_id") == 0 and row.get("column_id") == 1:
-            comp  = str(row.get("title", ""))
-            resp  = str(row.get("comments_parsed", ""))
-            fecha = safe_parse_due(row.get("due_date"))
-    
         else:
-            table._tbl.remove(new_cells[0]._tc)
-            continue
-    
+            # new mapping (label_id == 0 and column_id == 1)
+            comp  = str(row.get("title", ""))                 # Compromiso 
+            resp  = str(row.get("comments_parsed", ""))       # Responsable  
+            # Try to parse due_date, fallback to blank if missing
+            fecha = str(row.get("due_date", "") or "N/A")
+            if fecha and fecha != "N/A":
+                try:
+                    fecha = parse_comment_for_date(fecha) or fecha
+                except Exception:
+                    pass
         for cell, value in zip(new_cells, (comp, resp, fecha)):
             cell.text = value
             p = cell.paragraphs[0]

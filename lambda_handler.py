@@ -543,18 +543,31 @@ def add_commitments_table(doc: Document, df: pd.DataFrame) -> None:
     """
 
     # --- ensure numeric types so == works ---------------------------------
-    for col in ("label_id", "column_id"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    commits = df[
-        ((df["label_id"] == 0) & (df["column_id"] == 1)) |
-        (df.get("board_name", "") == "COMPROMISOS")
-    ].copy()
-
-    if commits.empty:
-        doc.add_paragraph("No commitments recorded.")
-        return
+    for _, row in commits.iterrows():
+        new_cells = table.add_row().cells
+    
+        if row.get("board_name") == "COMPROMISOS":
+            comp  = str(row.get("title", ""))
+            resp  = str(row.get("planlet_name", ""))
+            raw_c = str(row.get("comments_parsed", ""))
+            fecha = parse_comment_for_date(raw_c) or raw_c.strip("[]'\" ") or "N/A"
+    
+        elif row.get("label_id") == 0 and row.get("column_id") == 1:
+            comp  = str(row.get("title", ""))
+            resp  = str(row.get("comments_parsed", ""))
+            fecha = safe_parse_due(row.get("due_date"))
+    
+        else:
+            table._tbl.remove(new_cells[0]._tc)
+            continue
+    
+        for cell, value in zip(new_cells, (comp, resp, fecha)):
+            cell.text = value
+            p = cell.paragraphs[0]
+            p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+            run = p.runs[0]
+            run.font.size = Pt(10)
+            run.font.name = "Verdana"
 
     # --- Word table header -------------------------------------------------
     table = doc.add_table(rows=1, cols=3)

@@ -1,31 +1,68 @@
-name: dispatch-test-email
+# .github/workflows/deploy-projectplace-lambda.yml
+# -----------------------------------------------
+name: Build & Deploy – ProjectPlaceDataExtractor
+on: [workflow_dispatch, push]
 
-on:
-  workflow_dispatch:
-    inputs:
-      project_id:
-        description: 'Project ID'
-        required: true
-      recipient:
-        description: 'Additional recipient e-mail'
-        required: true
+env:
+  ECR_REPOSITORY: projectplace-lambda
+  LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor
 
 jobs:
-  send:
+  build_deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Invoke sendApprovalEmail
-        uses: aws-actions/aws-cli-action@v1
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ secrets.AWS_REGION }}
-          inline: |
-            echo '{"project_id":"${{ github.event.inputs.project_id }}","recipient":"${{ github.event.inputs.recipient }}"}' > payload.json
-            aws lambda invoke \
-              --function-name sendApprovalEmail \
-              --cli-binary-format raw-in-base64-out \
-              --payload file://payload.json \
-              out.json
-            cat out.json
+    - uses: actions/checkout@v3
 
+    - name: Configure AWS creds
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region:            ${{ secrets.AWS_REGION }}
+
+    - name: Login to ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+      with: { logout: true }
+
+    # ------------ Build *only* if tag is missing ------------
+    - name: Build & push (skip if exists)
+      id: buildpush
+      env:
+        REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
+        REPOSITORY: ${{ env.ECR_REPOSITORY }}
+        TAG:        ${{ github.sha }}
+      run: |
+        set -e
+        if aws ecr describe-images \
+             --repository-name "$REPOSITORY" \
+             --image-ids imageTag="$TAG" >/dev/null 2>&1; then
+          echo "ECR image $TAG already present – skip build."
+          echo "push-done=false" >> $GITHUB_OUTPUT
+        else
+          echo "::group::Docker build"
+          docker build -t $REGISTRY/$REPOSITORY:$TAG .
+          echo "::endgroup::"
+          docker push $REGISTRY/$REPOSITORY:$TAG
+          echo "push-done=true" >> $GITHUB_OUTPUT
+        fi
+
+    # ------------ Update Lambda ------------
+    - name: Update Lambda to new image (or existing digest)
+      if: steps.buildpush.outputs.push-done == 'true'
+           || steps.buildpush.outputs.push-done == ''
+      env:
+        REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
+        REPOSITORY: ${{ env.ECR_REPOSITORY }}
+        TAG:        ${{ github.sha }}
+      run: |
+        aws lambda update-function-code \
+          --function-name "$LAMBDA_FUNCTION_NAME" \
+          --image-uri     "$REGISTRY/$REPOSITORY:$TAG"
+
+    - name: Smoke-test invoke
+      run: |
+        aws lambda invoke --function-name "$LAMBDA_FUNCTION_NAME" \
+                          --cli-binary-format raw-in-base64-out \
+                          --payload '{}' response.json
+        cat response.json

@@ -1,8 +1,12 @@
-requests==2.31.0
-boto3==1.34.89
-pandas==2.2.2          # 🟢 wheel available for py3.11
-numpy==1.26.4          # 🟢 compatible with pandas 2.x
+# ───────── core runtime ─────────
+boto3==1.34.89          # already using this version
+numpy==1.26.4
+pandas==2.2.2           # depends on numpy 1.26.x
 openpyxl==3.1.2
 python-docx==0.8.11
-lxml==4.9.3
+
+# ───────── C-extension pulled by python-docx ─────────
+lxml==4.9.2             # ⬅️  **pin here – last wheel that works on Lambda glibc 2.26**
+
+# ───────── Lambda runtime interface ─────────
 awslambdaric==2.0.1

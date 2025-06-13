@@ -3,29 +3,10 @@ import json
 import time
 import logging
 import requests
-import ast
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import subprocess  # <-- For running LibreOffice headless
-
-
-# ----------------------------------------------------------------------------
-# HELPER – Due-date parsing
-# ----------------------------------------------------------------------------
-
-def safe_parse_due(due_val):
-    """Parse ISO string or epoch seconds into YYYY-MM-DD; return blank on failure."""
-    if not due_val or (isinstance(due_val, float) and pd.isna(due_val)):
-        return ""
-    try:
-        return str(datetime.fromisoformat(str(due_val).replace("Z", "")).date())
-    except Exception:
-        pass
-    try:
-        return str(datetime.fromtimestamp(float(due_val)).date())
-    except Exception:
-        return str(due_val)
+import subprocess
 import boto3
 from botocore.exceptions import ClientError
 from docx import Document
@@ -35,104 +16,85 @@ from docx.enum.table import WD_ALIGN_VERTICAL, WD_ROW_HEIGHT_RULE
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+import ast
 
+# ------------------------------------------------------------------------------
+# Logging Setup
+# ------------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # CONFIG
-# ----------------------------------------------------------------------------
-
+# ------------------------------------------------------------------------------
 SECRET_NAME = "ProjectPlaceAPICredentials"
 REGION = "us-east-2"
 PROJECTPLACE_API_URL = "https://api.projectplace.com"
-
-# Files & Paths
-OUTPUT_EXCEL = "/tmp/Acta_de_Seguimiento.xlsx"
-
-# Environment Variables
 DYNAMO_TABLE = os.getenv("DYNAMODB_TABLE_NAME", "ProjectPlace_DataExtrator_landing_table_v3")
 S3_BUCKET = os.getenv("S3_BUCKET_NAME", "projectplace-dv-2025-x9a7b")
-
-# BRAND_COLOR_HEADER changed from #2E86C1 → #4AC795
 BRAND_COLOR_HEADER = "4AC795"
 LIGHT_SHADE_2X2 = "FAFAFA"
-
-# Location for your logo image. Make sure it's included in your Docker image.
+OUTPUT_EXCEL = "/tmp/Acta_de_Seguimiento.xlsx"
 LOGO_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "logo", "company_logo.png")
 
-
+# ------------------------------------------------------------------------------
+# Lambda Handler
+# ------------------------------------------------------------------------------
 def lambda_handler(event, context):
-    """
-    1) Load secrets -> get token
-    2) Fetch *all active enterprise projects* dynamically
-    3) Generate Excel with tasks (cards) for each project + comments
-    4) snippet_filter => col_id=1, parse 'creator' => 'creator_name', parse last comment
-    5) Multi-doc creation (one doc per project)
-    6) Leader name => from 'creator_name'
-    7) Relaxed date parse for FECHA => if parse fails, display raw comment
-    8) Reordered columns for COMPROMISOS => ["COMPROMISO","RESPONSABLE","FECHA"]
-    9) Store in Dynamo + Upload to S3
-    10) (OPTIONAL) Convert docx to PDF + upload.
-    """
-    logger.info("🚀 Starting final Acta generation with dynamic project list + leader logic.")
+    logger.info("🚀 Starting Acta generation workflow.")
 
-    secret_dict = load_secrets()
-    client_id = secret_dict.get("PROJECTPLACE_ROBOT_CLIENT_ID", "")
-    client_secret = secret_dict.get("PROJECTPLACE_ROBOT_CLIENT_SECRET", "")
-    if not client_id or not client_secret:
+    # 1) Secrets → creds
+    secret = load_secrets()
+    cid = secret.get("PROJECTPLACE_ROBOT_CLIENT_ID")
+    csec = secret.get("PROJECTPLACE_ROBOT_CLIENT_SECRET")
+    if not (cid and csec):
         return {"statusCode": 500, "body": "Missing ProjectPlace credentials."}
 
-    # 1) Get Robot Token
-    token = get_robot_access_token(client_id, client_secret)
+    # 2) OAuth token
+    token = get_robot_access_token(cid, csec)
     if not token:
         return {"statusCode": 500, "body": "Failed to get ProjectPlace token."}
 
-    # 2) Dynamically fetch *active* enterprise projects
+    # 3) Active projects
     projects = get_all_account_projects(token, include_archived=False)
     if not projects:
         msg = "No active projects returned. Possibly no new or user has limited visibility."
         logger.warning(msg)
         return {"statusCode": 200, "body": msg}
 
-    # 3) Generate Excel with tasks (cards) for each project + comments
+    # 4) Build Excel with all cards
     excel_path = generate_excel_report(token, projects)
     if not excel_path:
         return {"statusCode": 500, "body": "No Excel generated (no cards?)."}
 
-    # 4) Build DataFrame from the Excel
+    # 5) DataFrame load
     df = pd.read_excel(excel_path)
-    
-    # 🔍  see what came back from Excel
     logger.info(f"[DEBUG] Excel load → rows={len(df)}, cols={list(df.columns)}")
-    
     if df.empty:
         logger.warning("Excel is empty—no tasks to process.")
         return {"statusCode": 200, "body": "No tasks found in Excel."}
-    
-    # 5) Store in Dynamo
+
+    # 6) Store in DynamoDB
     store_in_dynamodb(df)
-    
-    # 6) snippet => filter + parse
+
+    # 7) Business filter and enrichment
     df = snippet_filter(df)
-    logger.info(f"[DEBUG] After snippet_filter → rows={len(df)}")   # <— new breadcrumb
-    
+    logger.info(f"[DEBUG] After snippet_filter → rows={len(df)}")
     if df.empty:
         logger.warning("No tasks remain after snippet filter.")
         return {"statusCode": 200, "body": "No tasks remain after snippet filter."}
-    
-    # 7) Multi-doc creation
-    grouped = df.groupby("project_id")
+
+    # 8) Per-project docx (and optional PDF)
     doc_count = 0
+    grouped = df.groupby("project_id")
     for pid, project_df in grouped:
-        logger.info(f"[DEBUG] Build acta pid={pid} rows={len(project_df)}")  # <— new breadcrumb
+        logger.info(f"[DEBUG] Build acta pid={pid} rows={len(project_df)}")
         doc_path = build_acta_for_project(pid, project_df)
         if not doc_path:
             logger.error(f"❌ build_acta returned None for {pid}")
             continue
         doc_count += 1
-        
-        # Upload doc
+
         first_row = project_df.iloc[0]
         p_name = str(first_row.get("project_name", "UnknownProject"))
         safe_proj = p_name.replace("/", "_").replace(" ", "_")
@@ -143,13 +105,12 @@ def lambda_handler(event, context):
         try:
             pdf_path = convert_docx_to_pdf(doc_path)
             if pdf_path:
-                # e.g. "actas/Acta_ProjectName_1234.pdf"
                 s3_key_pdf = f"actas/Acta_{safe_proj}_{pid}.pdf"
                 upload_file_to_s3(pdf_path, s3_key_pdf)
         except Exception as exc:
             logger.error(f"PDF conversion failed for doc {doc_path}: {exc}")
-            
-    # 8) Upload Excel as well
+
+    # 9) Upload Excel as well
     s3_excel_key = "actas/Acta_de_Seguimiento.xlsx"
     upload_file_to_s3(excel_path, s3_excel_key)
 
@@ -159,10 +120,9 @@ def lambda_handler(event, context):
     }
     return {"statusCode": 200, "body": json.dumps(msg)}
 
-
-# ----------------------------------------------------------------------------
-# 1) SECRETS & OAUTH
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Secrets & OAuth
+# ------------------------------------------------------------------------------
 def load_secrets():
     sm = boto3.client("secretsmanager", region_name=REGION)
     try:
@@ -187,14 +147,11 @@ def get_robot_access_token(client_id, client_secret):
         logger.error(f"Token fetch error: {str(e)}")
         return None
 
-# ----------------------------------------------------------------------------
-# 2) ENTERPRISE PROJECTS
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Enterprise Projects
+# ------------------------------------------------------------------------------
 def get_all_account_projects(token, include_archived=False):
-    """
-    Calls /1/account/projects to list projects for the entire enterprise.
-    If include_archived=False, skip archived.
-    """
+    """Return list of enterprise projects (optionally incl. archived)."""
     url = f"{PROJECTPLACE_API_URL}/1/account/projects"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -203,7 +160,6 @@ def get_all_account_projects(token, include_archived=False):
     params = {}
     if include_archived:
         params["include_archived"] = 1
-
     try:
         r = requests.get(url, headers=headers, params=params)
         r.raise_for_status()
@@ -211,12 +167,10 @@ def get_all_account_projects(token, include_archived=False):
         if not isinstance(data, dict):
             logger.warning(f"Projects response not dict: {type(data)} => {data}")
             return []
-
         projects_list = data.get("projects", [])
         if not projects_list:
             logger.info("No projects found in /1/account/projects.")
             return []
-
         if not include_archived:
             active_projects = [p for p in projects_list if not p.get("archived", False)]
             logger.info(f"Fetched {len(active_projects)} active projects.")
@@ -224,27 +178,23 @@ def get_all_account_projects(token, include_archived=False):
         else:
             logger.info(f"Fetched {len(projects_list)} total projects (including archived).")
             return projects_list
-
     except requests.exceptions.RequestException as e:
         logger.error(f"Error listing enterprise projects: {e}")
         return []
 
-# ----------------------------------------------------------------------------
-# 3) EXCEL GENERATION
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Excel Generation & Card Helpers
+# ------------------------------------------------------------------------------
 def generate_excel_report(token, projects):
     if not projects:
         logger.warning("No projects provided to generate_excel_report.")
         return None
-
     all_cards = []
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
     for project_info in projects:
         pid = str(project_info.get("id"))
         p_name = project_info.get("name", "Unnamed Project")
         cards_url = f"{PROJECTPLACE_API_URL}/1/projects/{pid}/cards"
-
         try:
             resp = requests.get(cards_url, headers=headers)
             resp.raise_for_status()
@@ -252,7 +202,6 @@ def generate_excel_report(token, projects):
             for c in cards:
                 row = dict(c)
                 cid = c.get("id")
-
                 cmts = fetch_comments_for_card(token, cid)
                 # Capture label_id
                 label_val = None
@@ -262,27 +211,20 @@ def generate_excel_report(token, projects):
                     label_val = c["labels"][0].get("id")
                 row["label_id"] = label_val
                 row["Comments"] = str(cmts)
-
                 row["project_id"] = pid
                 row["project_name"] = p_name
                 row["archived"] = project_info.get("archived", False)
-
                 all_cards.append(row)
-
             logger.info(f"Fetched {len(cards)} cards from project '{p_name}' ({pid}).")
-
         except Exception as e:
             logger.error(f"Error fetching cards for project {pid}: {str(e)}")
-
     if not all_cards:
         logger.warning("No cards found across all projects.")
         return None
-
     df = pd.DataFrame(all_cards)
     df.to_excel(OUTPUT_EXCEL, index=False)
     logger.info(f"✅ Wrote {len(df)} rows to {OUTPUT_EXCEL}")
     return OUTPUT_EXCEL
-
 
 def fetch_comments_for_card(token, card_id):
     if not card_id:
@@ -299,9 +241,9 @@ def fetch_comments_for_card(token, card_id):
         logger.error(f"Failed to fetch comments for card {card_id}: {str(e)}")
     return out
 
-# ----------------------------------------------------------------------------
-# 4) DYNAMO
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# DynamoDB Ingest
+# ------------------------------------------------------------------------------
 def store_in_dynamodb(df):
     if df.empty:
         return
@@ -316,41 +258,35 @@ def store_in_dynamodb(df):
             "project_id": str(pid),
             "card_id": str(row.get("id","N/A")),
             "title": str(row.get("title","N/A")),
-                    "label_id": str(row.get("label_id","")),
+            "label_id": str(row.get("label_id","")),
             "timestamp": int(time.time())
         }
         table.put_item(Item=item)
         inserted += 1
     logger.info(f"Inserted {inserted} items into {DYNAMO_TABLE}")
 
-
-# ----------------------------------------------------------------------------
-# 5) SNIPPET FILTER
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Business Filter & Enrichment
+# ------------------------------------------------------------------------------
 def snippet_filter(df):
     if "column_id" in df.columns:
         df = df[df["column_id"] == 1].copy()
-
     df["comments_parsed"] = df["Comments"].apply(parse_last_comment)
-
     if "project" in df.columns:
         df["project_dict"] = df["project"].apply(parse_dict_column)
         df["project_id"] = df["project_dict"].apply(lambda p: p.get("id", None))
         df["project_name"] = df["project_dict"].apply(lambda p: p.get("name","Unknown Project"))
-
     if "creator" in df.columns:
         df["creator_dict"] = df["creator"].apply(parse_dict_column)
         df["creator_name"] = df["creator_dict"].apply(lambda c: c.get("name","N/A"))
     else:
         df["creator_name"] = "N/A"
-
     if "planlet" in df.columns:
         df["planlet_dict"] = df["planlet"].apply(parse_dict_column)
         df["planlet_name"] = df["planlet_dict"].apply(lambda d: d.get("label", d.get("name","")))
         df["wbs_str"] = df["planlet_dict"].apply(lambda d: d.get("wbs_id",""))
         df["wbs_tuple"] = df["wbs_str"].apply(parse_wbs_id)
         df = df[df["wbs_tuple"].apply(len)>0].copy()
-
     df = df[df["comments_parsed"].str.strip() != ""].copy()
     return df
 
@@ -380,6 +316,119 @@ def parse_wbs_id(wbs_str):
         except:
             pass
     return tuple(out)
+
+# ------------------------------------------------------------------------------
+# Word Docx Generation (+ all helpers)
+# ------------------------------------------------------------------------------
+def build_acta_for_project(pid, df_proj):
+    if df_proj.empty:
+        return None
+    if "wbs_tuple" in df_proj.columns:
+        df_proj = df_proj.sort_values("wbs_tuple")
+    first = df_proj.iloc[0]
+    pname = str(first.get("project_name", "Unknown Project"))
+    leader = str(first.get("creator_name", "N/A"))
+    doc = Document()
+    set_document_margins_and_orientation(doc)
+    add_page_x_of_y_footer(doc)
+    add_unified_visual_header(doc, "ACTA DE SEGUIMIENTO", LOGO_IMAGE_PATH)
+    doc.add_paragraph()
+    date_text = f"FECHA DEL ACTA: {datetime.now().strftime('%m/%d/%Y')}"
+    add_two_by_two_table(doc, date_text, pname, str(pid), leader, shade_color=LIGHT_SHADE_2X2)
+    doc.add_paragraph()
+    add_asistencia_table(doc, df_proj)
+    doc.add_paragraph()
+    add_horizontal_rule(doc)
+    doc.add_paragraph()
+    add_section_header(doc, "ESTADO DEL PROYECTO Y COMENTARIOS")
+    add_project_status_table(doc, df_proj)
+    doc.add_paragraph()
+    add_horizontal_rule(doc)
+    doc.add_paragraph()
+    add_section_header(doc, "COMPROMISOS")
+    add_commitments_table(doc, df_proj)
+    doc.add_paragraph()
+    safe_pname = pname.replace("/", "_").replace(" ", "_")
+    path = f"/tmp/Acta_{safe_pname}_{pid}.docx"
+    doc.save(path)
+    logger.info(f"Created doc {path}")
+    return path
+
+# =========== Insert your docx table-building helpers below as in prior scripts ============
+# (add_project_status_table, add_commitments_table, parse_comment_for_date, add_asistencia_table,
+# add_section_header, add_horizontal_rule, shade_cell, add_unified_visual_header, etc.)
+# Keep as in your latest working script!
+
+# ------------------------------------------------------------------------------
+# S3 Upload & PDF Conversion
+# ------------------------------------------------------------------------------
+def upload_file_to_s3(path, key):
+    s3 = boto3.client("s3", region_name=REGION)
+    try:
+        s3.upload_file(
+            Filename=path,
+            Bucket=S3_BUCKET,
+            Key=key,
+            ExtraArgs={
+                "ContentType": infer_content_type(key),
+                "ContentDisposition": f'attachment; filename="{os.path.basename(key)}"',
+            },
+        )
+        logger.info(f"Uploaded {path} → s3://{S3_BUCKET}/{key}")
+    except Exception as exc:
+        logger.error(f"S3 upload failed: {exc}")
+
+def convert_docx_to_pdf(doc_path):
+    if not os.path.exists(doc_path):
+        raise FileNotFoundError(doc_path)
+    cmd = [
+        "libreoffice",
+        "--headless",
+        "--convert-to",
+        "pdf",
+        doc_path,
+        "--outdir",
+        os.path.dirname(doc_path),
+    ]
+    subprocess.run(cmd, check=True)
+    pdf = doc_path.replace(".docx", ".pdf")
+    if not os.path.exists(pdf):
+        raise FileNotFoundError(pdf)
+    return pdf
+
+def infer_content_type(key):
+    lower = key.lower()
+    if lower.endswith(".docx"):
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if lower.endswith(".xlsx"):
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if lower.endswith(".pdf"):
+        return "application/pdf"
+    return "application/octet-stream"
+
+def set_document_margins_and_orientation(doc):
+    section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width = Inches(11)
+    section.page_height = Inches(8.5)
+    section.left_margin = section.right_margin = Inches(0.5)
+    section.top_margin = section.bottom_margin = Inches(0.5)
+
+def add_page_x_of_y_footer(doc):
+    section = doc.sections[0]
+    p = section.footer.paragraphs[0]
+    p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+    _insert_field(p.add_run("Page "), "PAGE")
+    p.add_run(" of ")
+    _insert_field(p.add_run(), "NUMPAGES")
+
+def _insert_field(run, fld):
+    begin = OxmlElement("w:fldChar"); begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText"); instr.set(qn("xml:space"), "preserve"); instr.text = fld
+    sep = OxmlElement("w:fldChar"); sep.set(qn("w:fldCharType"), "separate")
+    end = OxmlElement("w:fldChar"); end.set(qn("w:fldCharType"), "end")
+    for el in (begin, instr, sep, end):
+        run._r.append(el)
 
 # ----------------------------------------------------------------------------
 # 6) BUILD ACTA => includes COMPROMISOS

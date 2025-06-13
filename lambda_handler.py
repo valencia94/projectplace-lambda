@@ -1,29 +1,31 @@
+# ------------------------------------------------------------------------------
+# Imports
+# ------------------------------------------------------------------------------
 import os
 import json
 import time
 import logging
-import requests
-import pandas as pd
 from datetime import datetime
+import requests
 import boto3
 from botocore.exceptions import ClientError
 import ast
 import subprocess
 
-# ────────────────────────────────────────────────────────────────────
-# 1.  Lazy‑import the heavy libraries (pandas, numpy, python‑docx)
-# ────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+# Lazy-import heavy libraries on first use (pandas, numpy, python-docx)
+# ------------------------------------------------------------------------------
 pd = np = Document = Pt = Inches = RGBColor = None
 WD_ORIENT = WD_ROW_HEIGHT_RULE = WD_ALIGN_VERTICAL = WD_PARAGRAPH_ALIGNMENT = None
 OxmlElement = qn = None
 
 def _lazy_import_heavy():
-    """Load pandas / numpy / python‑docx on first invocation only."""
+    """Load pandas / numpy / python-docx only on cold start (saves Lambda memory)."""
     global pd, np, Document, Pt, Inches, RGBColor
     global WD_ORIENT, WD_ROW_HEIGHT_RULE, WD_ALIGN_VERTICAL, WD_PARAGRAPH_ALIGNMENT
     global OxmlElement, qn
 
-    if pd is None:  # first cold‑start only
+    if pd is None:
         import pandas as _pd, numpy as _np
         from docx import Document as _Document
         from docx.shared import Pt as _Pt, Inches as _Inches, RGBColor as _RGBColor
@@ -42,15 +44,18 @@ def _lazy_import_heavy():
         WD_ALIGN_VERTICAL, WD_PARAGRAPH_ALIGNMENT = _WD_ALIGN_VERTICAL, _WD_PARAGRAPH_ALIGNMENT
         OxmlElement, qn = _OxmlElement, _qn
 
+# ------------------------------------------------------------------------------
+# Logging Setup
+# ------------------------------------------------------------------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# ────────────────────────────────────────────────────────────────────
-# 2.  Config
-# ────────────────────────────────────────────────────────────────────
-SECRET_NAME = "ProjectPlaceAPICredentials"
-REGION = "us-east-2"
+# ------------------------------------------------------------------------------
+# Environment / Config
+# ------------------------------------------------------------------------------
+SECRET_NAME = os.getenv("SECRET_NAME", "ProjectPlaceAPICredentials")
+REGION = os.getenv("AWS_REGION", "us-east-2")
 PROJECTPLACE_API_URL = "https://api.projectplace.com"
-
-OUTPUT_EXCEL = "/tmp/Acta_de_Seguimiento.xlsx"
 
 DYNAMO_TABLE = os.getenv("DYNAMODB_TABLE_NAME", "ProjectPlace_DataExtrator_landing_table_v3")
 S3_BUCKET = os.getenv("S3_BUCKET_NAME", "projectplace-dv-2025-x9a7b")
@@ -58,11 +63,13 @@ S3_BUCKET = os.getenv("S3_BUCKET_NAME", "projectplace-dv-2025-x9a7b")
 BRAND_COLOR_HEADER = "4AC795"
 LIGHT_SHADE_2X2 = "FAFAFA"
 
-LOGO_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "logo", "company_logo.png")
+# Build logo path robustly for Lambda Docker
+HERE = os.path.dirname(__file__)
+LOGO_IMAGE_PATH = os.path.join(HERE, "logo", "company_logo.png")
+if not os.path.exists(LOGO_IMAGE_PATH):
+    logger.warning(f"Logo file not found: {LOGO_IMAGE_PATH} (continuing anyway)")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
+OUTPUT_EXCEL = "/tmp/Acta_de_Seguimiento.xlsx"
 
 # ────────────────────────────────────────────────────────────────────
 # 3.  Lambda entry‑point

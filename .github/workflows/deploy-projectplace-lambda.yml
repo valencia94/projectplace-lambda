@@ -1,0 +1,61 @@
+name: Build & Deploy ProjectPlaceDataExtractor
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'lambda_handler.py'
+      - '.github/workflows/deploy-projectplace-lambda.yml'
+  workflow_dispatch:
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    env:
+      ECR_REPOSITORY: projectplace-lambda          # ← existing ECR repo
+      LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor
+      IMAGE_TAG: latest
+    steps:
+      - name: 🛎️ Checkout source
+        uses: actions/checkout@v4
+
+      - name: 🔐 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: 🔑 Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: 🏗️ Build & push container image
+        env:
+          REGISTRY:    ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY:  ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG:   ${{ env.IMAGE_TAG }}
+        run: |
+          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+          docker push  $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+      - name: 🚀 Update Lambda to new image
+        env:
+          FUNCTION_NAME: ${{ env.LAMBDA_FUNCTION_NAME }}
+          REGISTRY:      ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY:    ${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG:     ${{ env.IMAGE_TAG }}
+        run: |
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --image-uri "$REGISTRY/$REPOSITORY:$IMAGE_TAG"
+
+      - name: ✅ Smoke test invoke
+        run: |
+          aws lambda invoke \
+            --function-name "ProjectPlaceDataExtractor" \
+            --cli-binary-format raw-in-base64-out \
+            --payload '{}' response.json
+          cat response.json

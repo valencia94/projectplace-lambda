@@ -1,26 +1,34 @@
-###############################################################################
-# ProjectPlaceDataExtractor – production container image for AWS Lambda
-###############################################################################
-# We stay on Python 3.10 so pandas 1.3.5 wheels resolve cleanly.
-FROM python:3.10-slim-bookworm
+#
+# Dockerfile — ProjectPlaceDataExtractor (immutable-tag friendly)
+#
 
-# ---------- OS packages (LibreOffice for DOCX→PDF & basic fonts) ------------
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-        libreoffice-core libreoffice-writer fonts-dejavu-core \
- && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
+############################
+# Stage 1 – build packages #
+############################
+FROM public.ecr.aws/lambda/python:3.11 AS build
 
-# ---------- Python deps ------------------------------------------------------
-WORKDIR /app
+# ---- system deps (LibreOffice + fonts) ----
+RUN yum -y install libreoffice && \
+    yum clean all
+
+# ---- Python dependencies ----
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
- && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -t /opt/python
 
-# ---------- Function code ----------------------------------------------------
-COPY lambda_handler.py           /app/
-COPY logo/company_logo.png       /app/logo/company_logo.png
+##############################
+# Stage 2 – final run image  #
+##############################
+FROM public.ecr.aws/lambda/python:3.11
 
-# ---------- Lambda entry-point ----------------------------------------------
-# awslambdaric exposes the handler the same way the AWS base image would.
-CMD [ "awslambdaric", "lambda_handler.lambda_handler" ]
+# copy Python libs + LibreOffice bits from builder
+COPY --from=build /opt/python          /opt/python
+COPY --from=build /usr/lib64/libreoffice /usr/lib64/libreoffice
+ENV PATH="/usr/lib64/libreoffice/program:${PATH}"
+
+# app code
+WORKDIR ${LAMBDA_TASK_ROOT}
+COPY lambda_handler.py .
+COPY logo/company_logo.png ./logo/company_logo.png
+
+# Lambda entrypoint (AWS base image will exec this handler)
+CMD ["lambda_handler.lambda_handler"]

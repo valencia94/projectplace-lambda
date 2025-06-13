@@ -490,10 +490,9 @@ def add_commitments_table(doc: Document, df: pd.DataFrame) -> None:
     Build the COMPROMISOS table.
 
     • New logic:   label_id == 0  AND column_id == 1
-    • Legacy:      board_name == "COMPROMISOS"     (column_id may be NaN)
+    • Legacy:      board_name == "COMPROMISOS"
     """
-
-    # --- ensure numeric types so == works ---------------------------------
+    # ---------- prep --------------------------------------------------
     for col in ("label_id", "column_id"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -507,54 +506,49 @@ def add_commitments_table(doc: Document, df: pd.DataFrame) -> None:
         doc.add_paragraph("No commitments recorded.")
         return
 
-    # --- Word table header -------------------------------------------------
+    # ---------- header -----------------------------------------------
     table = doc.add_table(rows=1, cols=3)
-    table.style  = "Table Grid"
+    table.style = "Table Grid"
     table.autofit = False
     hdr_row = table.rows[0]
-    hdr_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
-    hdr_row.height      = Inches(0.45)
-    table.columns[0].width = Inches(3.0)   # COMPROMISO
-    table.columns[1].width = Inches(4.0)   # RESPONSABLE
-    table.columns[2].width = Inches(3.0)   # FECHA
+    hdr_row.height_rule, hdr_row.height = WD_ROW_HEIGHT_RULE.AT_LEAST, Inches(0.45)
+    table.columns[0].width, table.columns[1].width, table.columns[2].width = \
+        Inches(3.0), Inches(4.0), Inches(3.0)
 
-    for i, text in enumerate(("COMPROMISO", "RESPONSABLE", "FECHA")):
+    for i, txt in enumerate(("COMPROMISO", "RESPONSABLE", "FECHA")):
         cell = hdr_row.cells[i]
         cell.paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-        cell.text = text
+        cell.text = txt
         run = cell.paragraphs[0].runs[0]
         run.bold, run.font.size, run.font.name = True, Pt(12), "Verdana"
         run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-        shd = OxmlElement("w:shd")
-        shd.set(qn("w:fill"), BRAND_COLOR_HEADER)
+        shd = OxmlElement("w:shd"); shd.set(qn("w:fill"), BRAND_COLOR_HEADER)
         cell._element.get_or_add_tcPr().append(shd)
 
-    # --- data rows ---------------------------------------------------------
+    # ---------- rows --------------------------------------------------
     for _, row in commits.iterrows():
         new_cells = table.add_row().cells
-    
-        if row.get("board_name") == "COMPROMISOS":
-            # ── legacy mapping ───────────────────────────────────────────
-            comp  = str(row.get("title", ""))                 # CompromisoAdd commentMore actions
-            resp  = str(row.get("planlet_name", ""))          # Responsable
-            raw_c = str(row.get("comments_parsed", ""))       # Fecha
+
+        if row.get("board_name") == "COMPROMISOS":        # legacy mapping
+            comp  = str(row.get("title", ""))
+            resp  = str(row.get("planlet_name", ""))
+            raw_c = str(row.get("comments_parsed", ""))
             fecha = parse_comment_for_date(raw_c) or raw_c.strip("[]'\" ") or "N/A"
-        else:
-            # new mapping (label_id == 0)
-            comp  = str(row.get("title", ""))                 # Compromiso 
-            resp  = str(row.get("comments_parsed", ""))       # Responsable  
-            fecha = safe_parse_due(row.get("due_date"))       # Fecha
-            
-        else:
-            # Row doesn’t match either style → remove the extra row & skip
+
+        elif (row.get("label_id") == 0) and (row.get("column_id") == 1):   # new mapping
+            comp  = str(row.get("title", ""))
+            resp  = str(row.get("comments_parsed", ""))
+            fecha = safe_parse_due(row.get("due_date"))
+
+        else:                                         # neither mapping → skip row
             table._tbl.remove(new_cells[0]._tc)
             continue
+
         for cell, value in zip(new_cells, (comp, resp, fecha)):
             cell.text = value
-            p = cell.paragraphs[0]
-            p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-            run = p.runs[0]
-            run.font.size, run.font.name = Pt(10), "Verdana"
+            p = cell.paragraphs[0]; p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+            run = p.runs[0]; run.font.size, run.font.name = Pt(10), "Verdana"
+
             
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")

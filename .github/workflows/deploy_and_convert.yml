@@ -1,175 +1,61 @@
-name: Deploy and Convert   # ← appears in Actions tab
+name: build-push-update-lambda
 
-################################################################################
-# 0️⃣  TRIGGERS
-################################################################################
 on:
   push:
-    branches: [main]              # run on every commit to main
-  workflow_dispatch: {}           # run manually from the UI
+    branches: [main]
+    paths:
+      - "**/*.py"
+      - Dockerfile
+      - requirements.txt
+      - .github/workflows/deploy_and_convert.yml
 
-################################################################################
-# 1️⃣  GLOBAL LITERAL CONSTANTS  (⚠️  NO ${{ }} HERE!)
-################################################################################
-env:
-  AWS_REGION:   us-east-2
-  ACCOUNT_ID:   703671891952
-  REPO_NAME:    projectplace-lambda
-  STAGE_TAG:    latest            # change to “stag” or a SHA tag if you wish
-
-################################################################################
-# 2️⃣  JOB : BUILD → PUSH → DEPLOY
-################################################################################
 jobs:
-  deploy-lambda:
+  deploy:
     runs-on: ubuntu-latest
 
-    ##########################################################################
-    # Build *derived* strings ONE time, expose via GITHUB_OUTPUT
-    ##########################################################################
-    steps:
-    - name: 📥 Checkout
-      uses: actions/checkout@v3
-
-    - name: 🛠 Derive runtime variables
-      id: vars
-      run: |
-        echo "ECR_REGISTRY=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"           >> "$GITHUB_OUTPUT"
-        echo "IMAGE_TAG=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPO_NAME}:${STAGE_TAG}" >> "$GITHUB_OUTPUT"
-
-    - name: 🔐 Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region:            ${{ env.AWS_REGION }}
-
-    - name: 🐳 Login to Amazon ECR
-      run: |
-        aws ecr get-login-password --region "${{ env.AWS_REGION }}" |
-        docker login --username AWS --password-stdin "${{ steps.vars.outputs.ECR_REGISTRY }}"
-
-    - name: 🚢 Build & push Docker image (no cache)
-      run: |
-        docker build --no-cache --pull -t "${{ steps.vars.outputs.IMAGE_TAG }}" .
-        docker push "${{ steps.vars.outputs.IMAGE_TAG }}"
-
-    - name: 🚀 Update Lambda to new image
-      run: |
-        aws lambda update-function-code \
-          --function-name ProjectPlaceDataExtractor \
-          --image-uri "${{ steps.vars.outputs.IMAGE_TAG }}" \
-          --region "${{ env.AWS_REGION }}"
-
-    - name: ⏳ Wait until Lambda “Active”
-      run: |
-        aws lambda wait function-updated \
-          --function-name ProjectPlaceDataExtractor \
-          --region "${{ env.AWS_REGION }}"
-
-    ##########################################################################
-    # Merge / apply ENV VARS (SECRET_NAME / DDB / S3)
-    ##########################################################################
-    - name: 📦 Install jq
-      run: sudo apt-get update && sudo apt-get install -y jq
-
-    - name: 🧬 Merge & apply environment variables
-      run: |
-        # pull existing
-        OLD=$(aws lambda get-function-configuration \
-                --function-name ProjectPlaceDataExtractor \
-                --region "${{ env.AWS_REGION }}" \
-                --query 'Environment.Variables' --output json)
-
-        # merge / override
-        NEW=$(echo "$OLD" | jq \
-          --arg secret ProjectPlaceAPICredentials \
-          --arg ddb   ProjectPlace_DataExtrator_landing_table_v3 \
-          --arg s3    projectplace-dv-2025-x9a7b \
-          '. + {
-            SECRET_NAME:        $secret,
-            DYNAMODB_TABLE_NAME:$ddb,
-            S3_BUCKET_NAME:     $s3
-          }')
-
-        echo '{"Variables":'"$NEW"'}' > env.json
-
-        aws lambda update-function-configuration \
-          --function-name ProjectPlaceDataExtractor \
-          --environment file://env.json \
-          --region "${{ env.AWS_REGION }}"
-
-    - name: ⏳ Wait until env update “Active”
-      run: |
-        aws lambda wait function-updated \
-          --function-name ProjectPlaceDataExtractor \
-          --region "${{ env.AWS_REGION }}"
-
-    ##########################################################################
-    # Smoke-invoke async so the convert job can start polling S3
-    ##########################################################################
-    - name: 🔎 Fire-and-forget Lambda invoke
-      run: |
-        aws lambda invoke \
-          --function-name ProjectPlaceDataExtractor \
-          --invocation-type Event \
-          --payload '{}' \
-          --region "${{ env.AWS_REGION }}" \
-          /tmp/resp.json
-        echo "Triggered → $(cat /tmp/resp.json)"
-
-################################################################################
-# 3️⃣  JOB : DOCX → PDF (Depends on deploy-lambda)
-################################################################################
-  convert-docx:
-    runs-on: ubuntu-latest
-    needs: [deploy-lambda]
+    env:
+      AWS_REGION: us-east-2
+      ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}          # 703671891952
+      REPO_NAME: projectplace-lambda
+      IMAGE_TAG: latest
 
     steps:
-    - name: 📥 Checkout (not strictly required, but handy for scripts)
-      uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: 🔐 Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region:            ${{ env.AWS_REGION }}
+      #— secure short-lived creds (GitHub->AWS OIDC)
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-    - name: 🏗 Install LibreOffice CLI
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libreoffice
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION |
+          docker login --username AWS --password-stdin \
+            $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-    - name: 📥 Poll S3 until Acta_*.docx appear (max 5 min)
-      run: |
-        mkdir -p actas
-        for i in {1..15}; do
-          echo "⏳ Attempt $i – syncing Acta_*.docx …"
-          aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas \
-            --exclude "*" --include "Acta_*.docx" --delete
-          COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l || true)
-          if [ "$COUNT" -gt 0 ]; then
-            echo "✅ $COUNT DOCX file(s) found."
-            break
-          fi
-          echo "🔄 Not yet. Sleeping 20 s …"
-          sleep 20
-          [ "$i" -eq 15 ] && { echo "❌ Timeout (5 min)"; exit 1; }
-        done
+      - name: Build & push container
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --provenance=false --sbom=false \
+            --push \
+            -t $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO_NAME:$IMAGE_TAG .
 
-    - name: 🖨 Convert each DOCX ⇒ PDF
-      run: |
-        cd actas
-        for f in Acta_*.docx; do
-          libreoffice --headless --convert-to pdf "$f"
-        done
-        echo "✅ Conversion finished."
+      - name: Update Lambda code
+        run: |
+          aws lambda update-function-code \
+            --function-name ProjectPlaceDataExtractor \
+            --image-uri $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO_NAME:$IMAGE_TAG \
+            --region $AWS_REGION
+          aws lambda wait function-updated \
+            --function-name ProjectPlaceDataExtractor \
+            --region $AWS_REGION
 
-    - name: 🚀 Upload PDFs back to S3
-      run: |
-        aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
-          --exclude "*" --include "Acta_*.pdf" \
-          --content-type "application/pdf" \
-          --content-disposition "attachment"
-        echo "✅ PDF upload complete."
+      - name: Fire and forget test invoke
+        run: |
+          aws lambda invoke \
+            --function-name ProjectPlaceDataExtractor \
+            --invocation-type Event \
+            --payload '{}' \
+            --region $AWS_REGION /dev/null

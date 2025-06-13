@@ -1,27 +1,26 @@
-##############################################################################
-# ProjectPlaceDataExtractor – AWS Lambda container image (Python 3.11)
-# * Stage 1 installs all Python wheels to /opt/python (Lambda default path)
-# * Stage 2 copies code + wheels into the official Lambda runtime base
-##############################################################################
+###############################################################################
+# ProjectPlaceDataExtractor – production container image for AWS Lambda
+###############################################################################
+# We stay on Python 3.10 so pandas 1.3.5 wheels resolve cleanly.
+FROM python:3.10-slim-bookworm
 
-# ---------- Stage 1: build dependencies -------------------------------------
-FROM public.ecr.aws/lambda/python:3.11 AS build
+# ---------- OS packages (LibreOffice for DOCX→PDF & basic fonts) ------------
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        libreoffice-core libreoffice-writer fonts-dejavu-core \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python deps
+# ---------- Python deps ------------------------------------------------------
+WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt -t /opt/python
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
-# ---------- Stage 2: runtime image ------------------------------------------
-FROM public.ecr.aws/lambda/python:3.11
+# ---------- Function code ----------------------------------------------------
+COPY lambda_handler.py           /app/
+COPY logo/company_logo.png       /app/logo/company_logo.png
 
-# Copy dependencies from build stage
-COPY --from=build /opt/python /opt/python
-
-# Copy function code (add more COPY lines if you have extra modules)
-COPY lambda_handler.py ${LAMBDA_TASK_ROOT}/
-
-# (Optional) LibreOffice CLI for DOCX→PDF – **huge**, install only if required
-# RUN yum install -y libreoffice && yum clean all
-
-# Entrypoint
-CMD ["lambda_handler.lambda_handler"]
+# ---------- Lambda entry-point ----------------------------------------------
+# awslambdaric exposes the handler the same way the AWS base image would.
+CMD [ "awslambdaric", "lambda_handler.lambda_handler" ]

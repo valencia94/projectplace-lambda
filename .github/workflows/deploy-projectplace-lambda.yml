@@ -11,9 +11,7 @@ on:
   workflow_dispatch:
 
 env:
-  # ─── real ECR repo name ───
-  ECR_REPOSITORY: projectplace-lambda          # << fixed
-  IMAGE_TAG:     latest
+  ECR_REPOSITORY: projectplace-lambda          # ← real repo
   LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor
 
 jobs:
@@ -24,6 +22,7 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
 
+    # ───────── AWS creds ─────────
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
@@ -35,26 +34,30 @@ jobs:
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    - name: Build & push container image
+    # ───────── Build & push with UNIQUE TAG (commit SHA) ─────────
+    - name: Build & push image
       env:
         REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
         REPOSITORY: ${{ env.ECR_REPOSITORY }}
-        TAG:        ${{ env.IMAGE_TAG }}
+        TAG:        ${{ github.sha }}          # ← immutable, unique
       run: |
+        echo "Building image $REGISTRY/$REPOSITORY:$TAG"
         docker build -t $REGISTRY/$REPOSITORY:$TAG .
         docker push   $REGISTRY/$REPOSITORY:$TAG
 
-    - name: Update Lambda function to new image
+    # ───────── Update Lambda to new tag ─────────
+    - name: Update Lambda function code
       env:
         REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
         REPOSITORY: ${{ env.ECR_REPOSITORY }}
-        TAG:        ${{ env.IMAGE_TAG }}
+        TAG:        ${{ github.sha }}
       run: |
         aws lambda update-function-code \
               --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
               --image-uri "$REGISTRY/$REPOSITORY:$TAG"
 
-    - name: Smoke-test invocation
+    # ───────── Optional smoke test ─────────
+    - name: Smoke-test invoke
       run: |
         aws lambda invoke --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
                           --cli-binary-format raw-in-base64-out \

@@ -4,10 +4,26 @@ import time
 import logging
 import requests
 import ast
-import pandas as pd
-import numpy as np
-from datetime import datetime
-import subprocess  # <-- For running LibreOffice headles
+
+# -------------------------------------------------------------------------
+# (NEW)  Lazy-import the heavy libraries so cold-start finishes in <1 s
+# -------------------------------------------------------------------------
+pd = np = Document = Pt = Inches = RGBColor = None          # globals we’ll fill
+
+def _lazy_import_heavy():
+    """
+    Bring in pandas / numpy / python-docx only the first time the
+    Lambda handler runs.  Subsequent invocations re-use the same modules.
+    """
+    global pd, np, Document, Pt, Inches, RGBColor
+    if pd is None:                                  # first call only
+        import pandas as _pd, numpy as _np
+        from docx import Document as _Document
+        from docx.shared import Pt as _Pt, Inches as _Inches, RGBColor as _RGBColor
+
+        # expose to the rest of the module
+        pd, np, Document = _pd, _np, _Document
+        Pt, Inches, RGBColor = _Pt, _Inches, _RGBColor
 
 
 # ----------------------------------------------------------------------------
@@ -63,6 +79,7 @@ LOGO_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "logo", "company_logo.
 
 
 def lambda_handler(event, context):
+    _lazy_import_heavy()          # <-- ❶ make sure heavy libs are loaded
     """
     1) Load secrets -> get token
     2) Fetch *all active enterprise projects* dynamically

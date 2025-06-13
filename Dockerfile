@@ -33,7 +33,7 @@ COPY --from=libre /usr/share/fonts      /usr/share/fonts
 ENV PATH="/usr/lib/libreoffice/program:${PATH}"
 
 # ---------- your code --------------------------------------------------------
-OPY lambda_handler.py ${LAMBDA_TASK_ROOT}/Add commentMore actions
+COPY lambda_handler.py ${LAMBDA_TASK_ROOT}/
 COPY logo/             /app/logo/
 
 # Lambda entrypoint

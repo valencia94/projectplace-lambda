@@ -1,69 +1,49 @@
-name: Build & Deploy – ProjectPlaceDataExtractor
+name: Deploy ProjectPlace Lambda
 
-on: [workflow_dispatch, push]
-
-env:
-  ECR_REPOSITORY: projectplace-lambda
-  LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor
+on:
+  push:
+    paths:
+      - 'lambda_handler.py'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - '.github/workflows/deploy-projectplace-lambda.yml'
+      - 'logo/**'
+  workflow_dispatch:
 
 jobs:
-  build_deploy:
+  build-and-push:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-    - name: Configure AWS creds
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region:            ${{ secrets.AWS_REGION }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
 
-    - name: Login to ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
-      with:
-        mask-password: true          # 🟢 suppress “password not masked”
-        skip-logout:  true           # 🟢 avoids unsupported ‘logout’ input
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-    # ---------- Build *only* when the SHA tag is missing ----------
-    - name: Build & push (skip if exists)
-      id: buildpush
-      env:
-        REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
-        REPOSITORY: ${{ env.ECR_REPOSITORY }}
-        TAG:        ${{ github.sha }}
-      run: |
-        set -e
-        if aws ecr describe-images \
-             --repository-name "$REPOSITORY" \
-             --image-ids imageTag="$TAG" >/dev/null 2>&1; then
-          echo "ECR image $TAG already exists – skipping Docker build."
-          echo "push-done=false" >> "$GITHUB_OUTPUT"
-        else
-          echo "::group::Docker build"
-          docker build -t $REGISTRY/$REPOSITORY:$TAG .
-          echo "::endgroup::"
-          docker push $REGISTRY/$REPOSITORY:$TAG
-          echo "push-done=true" >> "$GITHUB_OUTPUT"
-        fi
+      - name: Build Docker image for lambda
+        run: |
+          docker build --platform linux/amd64 -t ${{ secrets.ECR_REPO }}:latest .
 
-    # ---------- Update Lambda regardless (if code digest changed) ----------
-    - name: Update Lambda to new image
-      if: steps.buildpush.outputs.push-done == 'true'   # ← add this line
-      env:
-        REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
-        REPOSITORY: ${{ env.ECR_REPOSITORY }}
-        TAG:        ${{ github.sha }}
-      run: |
-        aws lambda update-function-code \
-          --function-name "$LAMBDA_FUNCTION_NAME" \
-          --image-uri     "$REGISTRY/$REPOSITORY:$TAG"
+      - name: Push Docker image to ECR
+        run: |
+          docker tag ${{ secrets.ECR_REPO }}:latest ${{ secrets.ECR_REPO }}:latest
+          docker push ${{ secrets.ECR_REPO }}:latest
 
-    - name: Smoke-test invoke
-      run: |
-        aws lambda invoke --function-name "$LAMBDA_FUNCTION_NAME" \
-                          --cli-binary-format raw-in-base64-out \
-                          --payload '{}' response.json
-        cat response.json
+      - name: Update Lambda function code
+        env:
+          AWS_REGION: us-east-2
+          LAMBDA_FUNCTION_NAME: projectplace-lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name $LAMBDA_FUNCTION_NAME \
+            --image-uri ${{ secrets.ECR_REPO }}:latest \
+            --region $AWS_REGION

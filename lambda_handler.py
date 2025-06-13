@@ -1,8 +1,13 @@
-import os, json, time, logging, requests, ast, subprocess
+import os
+import json
+import time
+import logging
+import requests
 from datetime import datetime
-
 import boto3
 from botocore.exceptions import ClientError
+import ast
+import subprocess
 
 # ────────────────────────────────────────────────────────────────────
 # 1.  Lazy‑import the heavy libraries (pandas, numpy, python‑docx)

@@ -33,8 +33,9 @@ COPY --from=libre /usr/share/fonts      /usr/share/fonts
 ENV PATH="/usr/lib/libreoffice/program:${PATH}"
 
 # ---------- your code --------------------------------------------------------
-WORKDIR /app
-COPY . .
+COPY lambda_handler.py ./
+COPY logo/ ./logo/
 
 # Lambda entrypoint
+ENTRYPOINT ["/usr/bin/python3", "-m", "awslambdaric"]
 CMD ["lambda_handler.lambda_handler"]

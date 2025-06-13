@@ -51,6 +51,7 @@ jobs:
 
     # ---------- Update Lambda regardless (if code digest changed) ----------
     - name: Update Lambda to new image
+      if: steps.buildpush.outputs.push-done == 'true'   # ← add this line
       env:
         REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
         REPOSITORY: ${{ env.ECR_REPOSITORY }}

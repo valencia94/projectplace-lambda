@@ -1,5 +1,5 @@
 ###############################################################################
-# ---------- Stage 0: Build Python wheels and Lambda dependencies -------------
+# Stage 0: Python wheels and Lambda dependencies
 ###############################################################################
 FROM public.ecr.aws/lambda/python:3.11 AS build
 
@@ -10,7 +10,7 @@ RUN python -m pip install --upgrade pip --no-cache-dir && \
         -r requirements.txt -t /opt/python
 
 ###############################################################################
-# ---------- Stage 1: LibreOffice binaries + all X11 fonts/libs ---------------
+# Stage 1: LibreOffice + all X11 libraries
 ###############################################################################
 FROM debian:bookworm-slim AS libre
 
@@ -20,32 +20,28 @@ RUN apt-get update -qq && \
         libreoffice-core libreoffice-writer fonts-dejavu-core \
         libxinerama1 libxrandr2 libxext6 libxrender1 \
         libsm6 libice6 libxt6 libx11-6 libglib2.0-0 \
-        && rm -rf /var/lib/apt/lists/*
+        libx11-xcb1 libcairo2 && \
+    rm -rf /var/lib/apt/lists/*
 
 ###############################################################################
-# ---------- Stage 2: Final AWS Lambda image ----------------------------------
+# Stage 2: Final Lambda image
 ###############################################################################
 FROM public.ecr.aws/lambda/python:3.11
 
-# Python packages
+# Copy Python dependencies
 COPY --from=build /opt/python /opt/python
 
-# LibreOffice runtime & fonts
+# Copy LibreOffice runtime, fonts, and all needed X11 libs
 COPY --from=libre /usr/lib/libreoffice /usr/lib/libreoffice
-COPY --from=libre /usr/share/fonts      /usr/share/fonts
+COPY --from=libre /usr/share/fonts /usr/share/fonts
+COPY --from=libre /usr/lib/x86_64-linux-gnu/ /usr/lib/x86_64-linux-gnu/
 
-# ----- HERE IS THE KEY CHANGE: copy all runtime libraries -----
-COPY --from=libre /usr/lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu
-COPY --from=libre /lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
-
-# Optional: symlink, just in case
-COPY --from=libre /usr/bin/soffice /usr/bin/libreoffice
+# Add symlink for libreoffice CLI (for subprocess call in Lambda)
+RUN ln -sf /usr/lib/libreoffice/program/soffice /usr/bin/libreoffice
 
 ENV PATH="/usr/lib/libreoffice/program:${PATH}"
 
-RUN ln -sf /usr/lib/libreoffice/program/soffice /usr/bin/libreoffice
-
-# Lambda handler code and resources
+# Copy your code and logo
 COPY lambda_handler.py ./
 COPY logo/ ./logo/
 

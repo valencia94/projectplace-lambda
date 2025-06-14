@@ -625,29 +625,30 @@ def add_commitments_table(doc, df):
     # --- data rows ---------------------------------------------------------
     for _, row in commits.iterrows():
         new_cells = table.add_row().cells
-    
-        if row.get("board_name") == "COMPROMISOS":
-            # ── legacy mapping ───────────────────────────────────────────
-            comp  = str(row.get("title", ""))                 # CompromisoAdd commentMore actions
-            resp  = str(row.get("planlet_name", ""))          # Responsable
-            raw_c = str(row.get("comments_parsed", ""))       # Fecha
+
+        # Modern mapping (label_id == 0 and column_id == 1)
+        if row.get("label_id") == 0 and row.get("column_id") == 1:
+            comp  = str(row.get("title", ""))
+            resp  = str(row.get("comments_parsed", ""))
+            fecha = safe_parse_due(row.get("due_date"))
+        # Legacy mapping (board_name == "COMPROMISOS")
+        elif row.get("board_name") == "COMPROMISOS":
+            comp  = str(row.get("title", ""))
+            resp  = str(row.get("planlet_name", ""))
+            raw_c = str(row.get("comments_parsed", ""))
             fecha = parse_comment_for_date(raw_c) or raw_c.strip("[]'\" ") or "N/A"
-        else:
-            # new mapping (label_id == 0)
-            comp  = str(row.get("title", ""))                 # Compromiso 
-            resp  = str(row.get("comments_parsed", ""))       # Responsable  
-            fecha = safe_parse_due(row.get("due_date"))       # Fecha
-            
         else:
             # Row doesn’t match either style → remove the extra row & skip
             table._tbl.remove(new_cells[0]._tc)
             continue
+
         for cell, value in zip(new_cells, (comp, resp, fecha)):
             cell.text = value
             p = cell.paragraphs[0]
             p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
             run = p.runs[0]
-            run.font.size, run.font.name = Pt(10), "Verdana"
+            run.font.size = Pt(10)
+            run.font.name = "Verdana"
             
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")
@@ -683,6 +684,7 @@ def upload_file_to_s3(file_path, s3_key):
         )
         logger.info(f"✅ Uploaded {file_path} => s3://{S3_BUCKET}/{s3_key}")
         return True
+        
     except Exception as e:
         logger.error(f"❌ S3 upload error: {str(e)}")
         return False

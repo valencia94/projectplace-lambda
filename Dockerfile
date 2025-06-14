@@ -13,7 +13,6 @@ RUN python -m pip install --upgrade pip --no-cache-dir && \
 # ---------- Stage 1 : LibreOffice binaries + fonts ---------------------------
 ###############################################################################
 FROM debian:bookworm-slim AS libre
-
 RUN apt-get update -qq && \
     DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \

@@ -65,7 +65,6 @@ jobs:
               --function-name "ProjectPlaceDataExtractor" \
               --invocation-type Event \
               --payload "$PAYLOAD" \
-              --cli-binary-format raw-in-base64-out \
               output.json \
               --region "${AWS_REGION}"
             echo "Lambda triggered (async) for project $PROJECT_ID"

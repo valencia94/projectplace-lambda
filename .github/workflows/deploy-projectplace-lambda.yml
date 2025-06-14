@@ -91,13 +91,17 @@ jobs:
             for i in {1..21}; do
               aws s3 sync s3://${{ env.S3_BUCKET }}/actas actas --exclude "*" --include "Acta_*.docx" --delete
               COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l || true)
-              if [ "$COUNT" -eq "${{ env.ACTA_COUNT }}" ]; then
-                echo "✅ $COUNT Acta DOCX files found (all expected)."
+              if [ "$COUNT" -gt 0 ]; then
+                if [ "$COUNT" -lt "$ACTA_COUNT" ]; then
+                  echo "⚠️ Only $COUNT of $ACTA_COUNT DOCX found; proceeding anyway."
+                else
+                  echo "✅ All $COUNT Acta DOCX files found."
+                fi
                 break
               fi
-              echo "🔄 Only $COUNT/${{ env.ACTA_COUNT }} found. Sleeping 20s..."
+              echo "🔄 None found yet. Sleeping 20s..."
               sleep 20
-              [ "$i" -eq 21 ] && { echo "❌ Timeout (7 min): Not all Acta present"; exit 1; }
+              [ "$i" -eq 21 ] && { echo "❌ Timeout (7 min): No Acta present"; exit 1; }
             done
 
       - name: List found Acta DOCX

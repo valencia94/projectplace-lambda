@@ -1,69 +1,59 @@
-name: Deploy & Convert ProjectPlace Acta
+name: Build & Deploy Lambda Container (Latest)
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
       - 'Dockerfile'
       - 'requirements.txt'
       - 'lambda_handler.py'
-      - '.github/workflows/deploy-projectplace-lambda.yml'
+      - 'logo/**'
+      - '.github/workflows/deploy-lambda.yml'
+  workflow_dispatch:
 
 env:
   AWS_REGION: us-east-2
-  ECR_REPOSITORY: projectplace-lambda
+  ECR_REPOSITORY: 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
   LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor
-  S3_BUCKET: projectplace-dv-2025-x9a7b
 
 jobs:
   build_deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.AWS_REGION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region:            ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
+    - name: Login to Amazon ECR
+      uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build & push container image
-        env:
-          REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
-          REPOSITORY: ${{ env.ECR_REPOSITORY }}
-          TAG:        ${{ github.sha }}
-        run: |
-          echo "::group::Docker build"
-          docker build -t $REGISTRY/$REPOSITORY:$TAG .
-          echo "::endgroup::"
-          docker push $REGISTRY/$REPOSITORY:$TAG
+    - name: Build & push Docker image (always latest, always no-cache)
+      run: |
+        docker build --no-cache -t $ECR_REPOSITORY:latest .
+        docker push $ECR_REPOSITORY:latest
 
-      - name: Update Lambda function code
-        env:
-          REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
-          REPOSITORY: ${{ env.ECR_REPOSITORY }}
-          TAG:        ${{ github.sha }}
-        run: |
-          aws lambda update-function-code \
-            --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
-            --image-uri "$REGISTRY/$REPOSITORY:$TAG"
+    - name: Update Lambda to latest image
+      run: |
+        aws lambda update-function-code \
+          --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
+          --image-uri "${{ env.ECR_REPOSITORY }}:latest" \
+          --region "${{ env.AWS_REGION }}"
 
-      - name: Invoke Lambda (async, fire-and-forget)
-        run: |
-          aws lambda invoke \
-            --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
-            --invocation-type Event \
-            --payload '{}' output.json \
-            --region "${{ env.AWS_REGION }}"
-          echo "Lambda triggered (async)"
+    - name: Invoke Lambda (async, fire-and-forget)
+      run: |
+        aws lambda invoke \
+          --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
+          --invocation-type Event \
+          --payload '{}' output.json \
+          --region "${{ env.AWS_REGION }}"
+        echo "Lambda triggered (async)"
 
   poll_and_convert:
     runs-on: ubuntu-latest

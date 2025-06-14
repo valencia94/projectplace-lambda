@@ -13,11 +13,13 @@ RUN python -m pip install --upgrade pip --no-cache-dir && \
 # ---------- Stage 1 : LibreOffice binaries + fonts ---------------------------
 ###############################################################################
 FROM debian:bookworm-slim AS libre
+
 RUN apt-get update -qq && \
     DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
         libreoffice-core libreoffice-writer fonts-dejavu-core \
-        libxinerama1 libxrandr2 libxext6 libxrender1 libsm6 libice6 libxt6 libx11-6 libglib2.0-0 && \
+        libxinerama1 libxrandr2 libxext6 libxrender1 \
+        libsm6 libice6 libxt6 libx11-6 libglib2.0-0 && \
     rm -rf /var/lib/apt/lists/*
 
 ###############################################################################

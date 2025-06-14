@@ -26,7 +26,7 @@ RUN apt-get update -qq && \
 FROM public.ecr.aws/lambda/python:3.11
 
 # Python site-packages layer
-CCOPY --from=build /opt/python /opt/python
+COPY --from=build /opt/python /opt/python
 COPY --from=libre /usr/lib/libreoffice /usr/lib/libreoffice
 COPY --from=libre /usr/share/fonts      /usr/share/fonts
 COPY --from=libre /usr/bin/soffice      /usr/bin/libreoffice

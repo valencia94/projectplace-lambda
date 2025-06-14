@@ -32,6 +32,7 @@ COPY --from=libre /usr/lib/libreoffice /usr/lib/libreoffice
 COPY --from=libre /usr/share/fonts      /usr/share/fonts
 ENV PATH="/usr/lib/libreoffice/program:${PATH}"
 
+RUN ln -sf /usr/lib/libreoffice/program/soffice /usr/bin/libreoffice
 # ---------- your code --------------------------------------------------------
 COPY lambda_handler.py ./
 COPY logo/ ./logo/

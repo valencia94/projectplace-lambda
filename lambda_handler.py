@@ -534,21 +534,71 @@ def add_project_status_table(doc, df):
             run.font.name = "Verdana"
 
 def add_commitments_table(doc, df):
-    # Ensure columns are present
+    """
+    Build the COMPROMISOS table.
+    - Modern: label_id == 0 and column_id == 1
+    - Legacy: board_name == "COMPROMISOS"
+    """
+    # --- ensure numeric types so == works ---
     for col in ("label_id", "column_id"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-        else:
-            df[col] = np.nan
 
-    # Unified, bulletproof filter
-    is_modern = (df["label_id"] == 0) & (df["column_id"] == 1)
-    is_legacy = df.get("board_name", "") == "COMPROMISOS"
-    commits = df[is_modern | is_legacy].copy()
+    commits = df[
+        ((df["label_id"] == 0) & (df["column_id"] == 1)) |
+        (df.get("board_name", "") == "COMPROMISOS")
+    ].copy()
 
     if commits.empty:
         doc.add_paragraph("No commitments recorded.")
         return
+
+    table = doc.add_table(rows=1, cols=3)
+    table.style  = "Table Grid"
+    table.autofit = False
+    hdr_row = table.rows[0]
+    hdr_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+    hdr_row.height      = Inches(0.45)
+    table.columns[0].width = Inches(3.0)
+    table.columns[1].width = Inches(4.0)
+    table.columns[2].width = Inches(3.0)
+
+    for i, text in enumerate(("COMPROMISO", "RESPONSABLE", "FECHA")):
+        cell = hdr_row.cells[i]
+        cell.paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        cell.text = text
+        run = cell.paragraphs[0].runs[0]
+        run.bold = True
+        run.font.size = Pt(12)
+        run.font.name = "Verdana"
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:fill"), BRAND_COLOR_HEADER)
+        cell._element.get_or_add_tcPr().append(shd)
+
+    for _, row in commits.iterrows():
+        new_cells = table.add_row().cells
+
+        if row.get("label_id") == 0 and row.get("column_id") == 1:
+            comp  = str(row.get("title", ""))
+            resp  = str(row.get("comments_parsed", ""))
+            fecha = safe_parse_due(row.get("due_date"))
+        elif row.get("board_name") == "COMPROMISOS":
+            comp  = str(row.get("title", ""))
+            resp  = str(row.get("planlet_name", ""))
+            raw_c = str(row.get("comments_parsed", ""))
+            fecha = parse_comment_for_date(raw_c) or raw_c.strip("[]'\" ") or "N/A"
+        else:
+            table._tbl.remove(new_cells[0]._tc)
+            continue
+
+        for cell, value in zip(new_cells, (comp, resp, fecha)):
+            cell.text = value
+            p = cell.paragraphs[0]
+            p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+            run = p.runs[0]
+            run.font.size = Pt(10)
+            run.font.name = "Verdana"
 
     # --- Word table header -------------------------------------------------
     table = doc.add_table(rows=1, cols=3)
@@ -575,7 +625,7 @@ def add_commitments_table(doc, df):
     # --- data rows ---------------------------------------------------------
     for _, row in commits.iterrows():
         new_cells = table.add_row().cells
-    
+
         # Modern mapping (label_id == 0 and column_id == 1)
         if row.get("label_id") == 0 and row.get("column_id") == 1:
             comp  = str(row.get("title", ""))
@@ -592,13 +642,13 @@ def add_commitments_table(doc, df):
             table._tbl.remove(new_cells[0]._tc)
             continue
 
-    for cell, value in zip(new_cells, (comp, resp, fecha)):
-        cell.text = value
-        p = cell.paragraphs[0]
-        p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-        run = p.runs[0]
-        run.font.size = Pt(10)
-        run.font.name = "Verdana"
+        for cell, value in zip(new_cells, (comp, resp, fecha)):
+            cell.text = value
+            p = cell.paragraphs[0]
+            p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+            run = p.runs[0]
+            run.font.size = Pt(10)
+            run.font.name = "Verdana"
             
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")

@@ -1,4 +1,4 @@
-name: Build & Deploy – ProjectPlaceDataExtractor
+name: Build, Deploy & Convert – ProjectPlaceDataExtractor
 
 on:
   push:
@@ -11,8 +11,9 @@ on:
   workflow_dispatch:
 
 env:
+  AWS_REGION: us-east-2
   ECR_REPOSITORY: projectplace-lambda
-  LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor   # ← real Lambda name
+  LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor
 
 jobs:
   build_deploy:
@@ -22,31 +23,28 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
 
-    # ---------- AWS credentials ----------
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
         aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region:            ${{ secrets.AWS_REGION }}
+        aws-region:            ${{ env.AWS_REGION }}
 
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    # ---------- BUILD & PUSH (commit-SHA tag) ----------
     - name: Build & push container image
       env:
         REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
         REPOSITORY: ${{ env.ECR_REPOSITORY }}
-        TAG:        ${{ github.sha }}        # ← immutable, unique
+        TAG:        ${{ github.sha }}
       run: |
         echo "::group::Docker build"
         docker build -t $REGISTRY/$REPOSITORY:$TAG .
         echo "::endgroup::"
         docker push $REGISTRY/$REPOSITORY:$TAG
 
-    # ---------- Update Lambda to the new image ----------
     - name: Update Lambda function code
       env:
         REGISTRY:   ${{ steps.login-ecr.outputs.registry }}
@@ -57,10 +55,63 @@ jobs:
           --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
           --image-uri "$REGISTRY/$REPOSITORY:$TAG"
 
-    # ---------- Optional smoke-test ----------
-    - name: Smoke test invoke
+    # ---- Fire Lambda Async (so S3 job can start polling) ----
+    - name: Invoke Lambda (async, fire-and-forget)
       run: |
-        aws lambda invoke --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
-                          --cli-binary-format raw-in-base64-out \
-                          --payload '{}' response.json
-        cat response.json
+        aws lambda invoke \
+          --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
+          --invocation-type Event \
+          --payload '{}' \
+          --region "${{ env.AWS_REGION }}" \
+          /tmp/resp.json
+        echo "Triggered → $(cat /tmp/resp.json)"
+
+  convert_docx:
+    runs-on: ubuntu-latest
+    needs: build_deploy
+
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region:            ${{ env.AWS_REGION }}
+
+    - name: Install LibreOffice
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libreoffice
+
+    - name: Poll S3 until Acta_*.docx appear (max 5 min)
+      run: |
+        mkdir -p actas
+        for i in {1..15}; do
+          echo "⏳ Attempt $i – syncing Acta_*.docx …"
+          aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas \
+            --exclude "*" --include "Acta_*.docx" --delete
+          COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l || true)
+          if [ "$COUNT" -gt 0 ]; then
+            echo "✅ $COUNT DOCX file(s) found."
+            break
+          fi
+          echo "🔄 Not yet. Sleeping 20 s …"
+          sleep 20
+          [ "$i" -eq 15 ] && { echo "❌ Timeout (5 min)"; exit 1; }
+        done
+
+    - name: Convert each DOCX ⇒ PDF
+      run: |
+        cd actas
+        for f in Acta_*.docx; do
+          libreoffice --headless --convert-to pdf "$f"
+        done
+        echo "✅ Conversion finished."
+
+    - name: Upload PDFs back to S3
+      run: |
+        aws s3 sync actas s3://projectplace-dv-2025-x9a7b/actas \
+          --exclude "*" --include "Acta_*.pdf" \
+          --content-type "application/pdf" \
+          --content-disposition "attachment"
+        echo "✅ PDF upload complete."

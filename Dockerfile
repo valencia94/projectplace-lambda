@@ -10,7 +10,7 @@ RUN python -m pip install --upgrade pip --no-cache-dir && \
         -r requirements.txt -t /opt/python
 
 ###############################################################################
-# ---------- Stage 1 : LibreOffice binaries + all X11 fonts/libs -------------
+# ---------- Stage 1 : LibreOffice binaries + X11 fonts/libs -----------------
 ###############################################################################
 FROM debian:bookworm-slim AS libre
 
@@ -23,14 +23,11 @@ RUN apt-get update -qq && \
         && rm -rf /var/lib/apt/lists/*
 
 ###############################################################################
-# ---------- Stage 2 : Final AWS Lambda image ---------------------------------
+# ---------- Stage 2 : Final AWS Lambda image --------------------------------
 ###############################################################################
 FROM public.ecr.aws/lambda/python:3.11
 
-# ----------- Copy Python packages -----------------
 COPY --from=build /opt/python /opt/python
-
-# ----------- Copy LibreOffice runtime + X11 fonts/libs -------------
 COPY --from=libre /usr/lib/libreoffice /usr/lib/libreoffice
 COPY --from=libre /usr/share/fonts /usr/share/fonts
 COPY --from=libre /usr/lib/x86_64-linux-gnu/libXinerama.so.1 /usr/lib/x86_64-linux-gnu/
@@ -43,15 +40,10 @@ COPY --from=libre /usr/lib/x86_64-linux-gnu/libXt.so.6 /usr/lib/x86_64-linux-gnu
 COPY --from=libre /usr/lib/x86_64-linux-gnu/libX11.so.6 /usr/lib/x86_64-linux-gnu/
 COPY --from=libre /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 /usr/lib/x86_64-linux-gnu/
 
-# ----------- Make sure the libreoffice command works as expected -------------
 ENV PATH="/usr/lib/libreoffice/program:${PATH}"
-
-# ----------- Symlink for lambda subprocess calls -------------
 RUN ln -sf /usr/lib/libreoffice/program/soffice /usr/bin/libreoffice
 
-# ----------- Copy your Lambda handler and logo folder ----------
 COPY lambda_handler.py ./
 COPY logo/ ./logo/
 
-# ----------- Set Lambda entrypoint -------------
 CMD ["lambda_handler.lambda_handler"]

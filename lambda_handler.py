@@ -74,6 +74,8 @@ def lambda_handler(event, context):
         logger.warning("Excel is empty—no tasks to process.")
         return {"statusCode": 200, "body": "No tasks found in Excel."}
 
+    logger.info(f"Project IDs found: {df['project_id'].unique().tolist()}")
+
     # 6) Store in DynamoDB
     store_in_dynamodb(df)
 
@@ -110,9 +112,17 @@ def lambda_handler(event, context):
         except Exception as exc:
             logger.error(f"PDF conversion failed for doc {doc_path}: {exc}")
 
-    # 9) Upload Excel as well
+    # 9) Upload Excel as well (always after closing/writing)
     s3_excel_key = "actas/Acta_de_Seguimiento.xlsx"
     upload_file_to_s3(excel_path, s3_excel_key)
+
+    # (Optional) Write marker file for workflow
+    try:
+        s3 = boto3.client("s3", region_name=REGION)
+        s3.put_object(Bucket=S3_BUCKET, Key="actas/_done.txt", Body=b"done")
+        logger.info("Uploaded marker file actas/_done.txt")
+    except Exception as exc:
+        logger.warning(f"Failed to write _done.txt marker: {exc}")
 
     msg = {
         "message": f"Multi-Acta creation done. Docs created={doc_count}",
@@ -203,7 +213,6 @@ def generate_excel_report(token, projects):
                 row = dict(c)
                 cid = c.get("id")
                 cmts = fetch_comments_for_card(token, cid)
-                # Capture label_id
                 label_val = None
                 if "label_id" in c:
                     label_val = c.get("label_id")
@@ -354,140 +363,13 @@ def build_acta_for_project(pid, df_proj):
     logger.info(f"Created doc {path}")
     return path
 
-# =========== Insert your docx table-building helpers below as in prior scripts ============
-# (add_project_status_table, add_commitments_table, parse_comment_for_date, add_asistencia_table,
-# add_section_header, add_horizontal_rule, shade_cell, add_unified_visual_header, etc.)
-# Keep as in your latest working script!
-
-# ------------------------------------------------------------------------------
-# S3 Upload & PDF Conversion
-# ------------------------------------------------------------------------------
-def upload_file_to_s3(path, key):
-    s3 = boto3.client("s3", region_name=REGION)
-    try:
-        s3.upload_file(
-            Filename=path,
-            Bucket=S3_BUCKET,
-            Key=key,
-            ExtraArgs={
-                "ContentType": infer_content_type(key),
-                "ContentDisposition": f'attachment; filename="{os.path.basename(key)}"',
-            },
-        )
-        logger.info(f"Uploaded {path} → s3://{S3_BUCKET}/{key}")
-    except Exception as exc:
-        logger.error(f"S3 upload failed: {exc}")
-
-def convert_docx_to_pdf(doc_path):
-    if not os.path.exists(doc_path):
-        raise FileNotFoundError(doc_path)
-    cmd = [
-        "libreoffice",
-        "--headless",
-        "--convert-to",
-        "pdf",
-        doc_path,
-        "--outdir",
-        os.path.dirname(doc_path),
-    ]
-    subprocess.run(cmd, check=True)
-    pdf = doc_path.replace(".docx", ".pdf")
-    if not os.path.exists(pdf):
-        raise FileNotFoundError(pdf)
-    return pdf
-
-def infer_content_type(key):
-    lower = key.lower()
-    if lower.endswith(".docx"):
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    if lower.endswith(".xlsx"):
-        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    if lower.endswith(".pdf"):
-        return "application/pdf"
-    return "application/octet-stream"
-
-def set_document_margins_and_orientation(doc):
-    section = doc.sections[0]
-    section.orientation = WD_ORIENT.LANDSCAPE
-    section.page_width = Inches(11)
-    section.page_height = Inches(8.5)
-    section.left_margin = section.right_margin = Inches(0.5)
-    section.top_margin = section.bottom_margin = Inches(0.5)
-
-def add_page_x_of_y_footer(doc):
-    section = doc.sections[0]
-    p = section.footer.paragraphs[0]
-    p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    _insert_field(p.add_run("Page "), "PAGE")
-    p.add_run(" of ")
-    _insert_field(p.add_run(), "NUMPAGES")
-
-def _insert_field(run, fld):
-    begin = OxmlElement("w:fldChar"); begin.set(qn("w:fldCharType"), "begin")
-    instr = OxmlElement("w:instrText"); instr.set(qn("xml:space"), "preserve"); instr.text = fld
-    sep = OxmlElement("w:fldChar"); sep.set(qn("w:fldCharType"), "separate")
-    end = OxmlElement("w:fldChar"); end.set(qn("w:fldCharType"), "end")
-    for el in (begin, instr, sep, end):
-        run._r.append(el)
-
-# ----------------------------------------------------------------------------
-# 6) BUILD ACTA => includes COMPROMISOS
-# ----------------------------------------------------------------------------
-def build_acta_for_project(pid, project_df):
-    if project_df.empty:
-        return None
-
-    if "wbs_tuple" in project_df.columns:
-        project_df = project_df.sort_values("wbs_tuple", ascending=True)
-
-    first_row = project_df.iloc[0]
-    project_name = str(first_row.get("project_name","Unknown Project"))
-    leader_name = str(first_row.get("creator_name","N/A"))
-
-    doc = Document()
-    set_document_margins_and_orientation(doc)
-    add_page_x_of_y_footer(doc)
-
-    add_unified_visual_header(doc, "ACTA DE SEGUIMIENTO", LOGO_IMAGE_PATH)  # 👈 Adds legal fields as shown in client doc
-    doc.add_paragraph()
-
-    date_now = datetime.now().strftime("%m/%d/%Y")
-    date_text = f"FECHA DEL ACTA: {date_now}"
-    add_two_by_two_table(doc, date_text, project_name, str(pid), leader_name, shade_color=LIGHT_SHADE_2X2)
-
-    doc.add_paragraph()
-    add_asistencia_table(doc, project_df)
-
-    doc.add_paragraph()
-    add_horizontal_rule(doc)
-    doc.add_paragraph()
-
-    add_section_header(doc, "ESTADO DEL PROYECTO Y COMENTARIOS")
-    add_project_status_table(doc, project_df)
-
-    doc.add_paragraph()
-    add_horizontal_rule(doc)
-    doc.add_paragraph()
-
-    add_section_header(doc, "COMPROMISOS")
-    add_commitments_table(doc, project_df)
-    doc.add_paragraph()
-
-    safe_proj_name = project_name.replace(" ", "_").replace("/", "_")
-    doc_path = f"/tmp/Acta_{safe_proj_name}_{pid}.docx"
-    doc.save(doc_path)
-    logger.info(f"Created doc => {doc_path}")
-    return doc_path
-
 def add_project_status_table(doc, df):
-    # --- filter rows ---------------------------------------------------
     df = df[df["label_id"] != 0]
     df = df[df.get("board_name", "") != "COMPROMISOS"].copy()
     df = df[~df["planlet_name"].isin(
         ["ASISTENCIA", "ASISTENCIA CLIENTE", "ASISTENCIA IKUSI"]
     )].copy()
 
-    # --- collect rows for the table -----------------------------------
     table_data = []
     for _, row in df.iterrows():
         hito        = str(row.get("planlet_name", ""))
@@ -495,7 +377,6 @@ def add_project_status_table(doc, df):
         desarrollo  = str(row.get("comments_parsed", ""))
         table_data.append([hito, actividades, desarrollo])
 
-    # --- build the actual Word table (one-time) ------------------------
     table = doc.add_table(rows=1, cols=3)
     table.style  = "Table Grid"
     table.autofit = False
@@ -508,8 +389,7 @@ def add_project_status_table(doc, df):
     table.columns[1].width = Inches(2.5)
     table.columns[2].width = Inches(5.0)
 
-    # CHANGED: "HITO" => "HITO/TEMA"
-    headers = ["HITO/TEMA", "ACTIVIDADES", "DESARROLLO"]  # <--- CHANGED
+    headers = ["HITO/TEMA", "ACTIVIDADES", "DESARROLLO"]
     hdr_cells = hdr_row.cells
     for i, hdr_text in enumerate(headers):
         hdr_cells[i].paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
@@ -534,21 +414,25 @@ def add_project_status_table(doc, df):
             run.font.name = "Verdana"
 
 def add_commitments_table(doc, df):
-    # Ensure columns are present
     for col in ("label_id", "column_id"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        else:
+        if col not in df.columns:
             df[col] = np.nan
-
-    # Unified, bulletproof filter
+        else:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     is_modern = (df["label_id"] == 0) & (df["column_id"] == 1)
     is_legacy = df.get("board_name", "") == "COMPROMISOS"
     commits = df[is_modern | is_legacy].copy()
-
+    logger.info(f"Commitments table: {len(commits)} rows")
     if commits.empty:
         doc.add_paragraph("No commitments recorded.")
         return
+    table = doc.add_table(rows=1, cols=3)
+    table.style  = "Table Grid"
+    table.autofit = False
+    hdr_row = table.rows[0]
+    hdr_row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+    hdr_row.height      = Inches(0.45)
+    table.columns
 
     # --- Word table header -------------------------------------------------
     table = doc.add_table(rows=1, cols=3)

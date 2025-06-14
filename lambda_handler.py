@@ -625,7 +625,7 @@ def add_commitments_table(doc, df):
     # --- data rows ---------------------------------------------------------
     for _, row in commits.iterrows():
         new_cells = table.add_row().cells
-
+    
         # Modern mapping (label_id == 0 and column_id == 1)
         if row.get("label_id") == 0 and row.get("column_id") == 1:
             comp  = str(row.get("title", ""))
@@ -642,13 +642,13 @@ def add_commitments_table(doc, df):
             table._tbl.remove(new_cells[0]._tc)
             continue
 
-        for cell, value in zip(new_cells, (comp, resp, fecha)):
-            cell.text = value
-            p = cell.paragraphs[0]
-            p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-            run = p.runs[0]
-            run.font.size = Pt(10)
-            run.font.name = "Verdana"
+    for cell, value in zip(new_cells, (comp, resp, fecha)):
+        cell.text = value
+        p = cell.paragraphs[0]
+        p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+        run = p.runs[0]
+        run.font.size = Pt(10)
+        run.font.name = "Verdana"
             
 def parse_comment_for_date(comment_text):
     c = comment_text.strip("[]'\" ")

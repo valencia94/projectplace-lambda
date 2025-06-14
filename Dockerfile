@@ -34,16 +34,15 @@ COPY --from=build /opt/python /opt/python
 # Copy LibreOffice runtime, fonts, and all needed X11 libs
 COPY --from=libre /usr/lib/libreoffice /usr/lib/libreoffice
 COPY --from=libre /usr/share/fonts /usr/share/fonts
-COPY --from=libre /usr/lib/x86_64-linux-gnu/ /usr/lib/x86_64-linux-gnu/
-COPY --from=libre /usr/lib/aarch64-linux-gnu/libXinerama.so.1 /usr/lib/aarch64-linux-gnu/
-COPY --from=libre /usr/lib/aarch64-linux-gnu/libXrandr.so.2 /usr/lib/aarch64-linux-gnu/
-COPY --from=libre /usr/lib/aarch64-linux-gnu/libXext.so.6 /usr/lib/aarch64-linux-gnu/
-COPY --from=libre /usr/lib/aarch64-linux-gnu/libXrender.so.1 /usr/lib/aarch64-linux-gnu/
-COPY --from=libre /usr/lib/aarch64-linux-gnu/libSM.so.6 /usr/lib/aarch64-linux-gnu/
-COPY --from=libre /usr/lib/aarch64-linux-gnu/libICE.so.6 /usr/lib/aarch64-linux-gnu/
-COPY --from=libre /usr/lib/aarch64-linux-gnu/libXt.so.6 /usr/lib/aarch64-linux-gnu/
-COPY --from=libre /usr/lib/aarch64-linux-gnu/libX11.so.6 /usr/lib/aarch64-linux-gnu/
-COPY --from=libre /usr/lib/aarch64-linux-gnu/libglib-2.0.so.0 /usr/lib/aarch64-linux-gnu/
+COPY --from=libre /usr/lib/x86_64-linux-gnu/libXinerama.so.1 /usr/lib/x86_64-linux-gnu/
+COPY --from=libre /usr/lib/x86_64-linux-gnu/libXrandr.so.2 /usr/lib/x86_64-linux-gnu/
+COPY --from=libre /usr/lib/x86_64-linux-gnu/libXext.so.6 /usr/lib/x86_64-linux-gnu/
+COPY --from=libre /usr/lib/x86_64-linux-gnu/libXrender.so.1 /usr/lib/x86_64-linux-gnu/
+COPY --from=libre /usr/lib/x86_64-linux-gnu/libSM.so.6 /usr/lib/x86_64-linux-gnu/
+COPY --from=libre /usr/lib/x86_64-linux-gnu/libICE.so.6 /usr/lib/x86_64-linux-gnu/
+COPY --from=libre /usr/lib/x86_64-linux-gnu/libXt.so.6 /usr/lib/x86_64-linux-gnu/
+COPY --from=libre /usr/lib/x86_64-linux-gnu/libX11.so.6 /usr/lib/x86_64-linux-gnu/
+COPY --from=libre /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 /usr/lib/x86_64-linux-gnu/
 
 # Add symlink for libreoffice CLI (for subprocess call in Lambda)
 RUN ln -sf /usr/lib/libreoffice/program/soffice /usr/bin/libreoffice

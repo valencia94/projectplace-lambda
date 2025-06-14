@@ -16,7 +16,8 @@ FROM debian:bookworm-slim AS libre
 RUN apt-get update -qq && \
     DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
-        libreoffice-core libreoffice-writer fonts-dejavu-core && \
+        libreoffice-core libreoffice-writer fonts-dejavu-core \
+        libxinerama1 libxrandr2 libxext6 libxrender1 libsm6 libice6 libxt6 libx11-6 libglib2.0-0 && \
     rm -rf /var/lib/apt/lists/*
 
 ###############################################################################
@@ -25,11 +26,10 @@ RUN apt-get update -qq && \
 FROM public.ecr.aws/lambda/python:3.11
 
 # Python site-packages layer
-COPY --from=build /opt/python /opt/python
-
-# LibreOffice runtime & fonts
+CCOPY --from=build /opt/python /opt/python
 COPY --from=libre /usr/lib/libreoffice /usr/lib/libreoffice
 COPY --from=libre /usr/share/fonts      /usr/share/fonts
+COPY --from=libre /usr/bin/soffice      /usr/bin/libreoffice
 ENV PATH="/usr/lib/libreoffice/program:${PATH}"
 
 RUN ln -sf /usr/lib/libreoffice/program/soffice /usr/bin/libreoffice

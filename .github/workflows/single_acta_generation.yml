@@ -59,14 +59,16 @@ jobs:
         env:
           PROJECT_ID: ${{ github.event.inputs.project_id }}
         run: |
-          PAYLOAD="{\"project_id\": \"${PROJECT_ID}\"}"
-          echo "Invoking Lambda for project_id=$PROJECT_ID"
-          aws lambda invoke \
-            --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
-            --invocation-type Event \
-            --payload "$PAYLOAD" output.json \
-            --region "${AWS_REGION}"
-          echo "Lambda triggered (async) for project $PROJECT_ID"
+            PAYLOAD="{\"project_id\": \"${PROJECT_ID}\"}"
+            echo "Invoking Lambda for project_id=$PROJECT_ID"
+            aws lambda invoke \
+              --function-name "ProjectPlaceDataExtractor" \
+              --invocation-type Event \
+              --payload "$PAYLOAD" \
+              --cli-binary-format raw-in-base64-out \
+              output.json \
+              --region "${AWS_REGION}"
+            echo "Lambda triggered (async) for project $PROJECT_ID"
 
   poll_and_convert:
     runs-on: ubuntu-latest

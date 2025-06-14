@@ -15,6 +15,7 @@ env:
   AWS_REGION: us-east-2
   ECR_REPOSITORY: 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
   LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor
+  S3_BUCKET: projectplace-dv-2025-x9a7b
 
 jobs:
   build_deploy:

@@ -1,6 +1,7 @@
-name: Build, Deploy & Convert – ProjectPlaceDataExtractor
+name: Deploy & Convert ProjectPlace Acta
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
     paths:
@@ -8,7 +9,6 @@ on:
       - 'requirements.txt'
       - 'lambda_handler.py'
       - '.github/workflows/deploy-projectplace-lambda.yml'
-  workflow_dispatch:
 
 env:
   AWS_REGION: us-east-2
@@ -61,12 +61,11 @@ jobs:
         aws lambda invoke \
           --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
           --invocation-type Event \
-          --payload '{}' \
-          --region "${{ env.AWS_REGION }}" \
-          /tmp/resp.json
-        echo "Triggered → $(cat /tmp/resp.json)"
+          --payload '{}' output.json \
+          --region "${{ env.AWS_REGION }}"
+        echo "Lambda triggered (async)"
 
-  convert_docx:
+  poll_and_convert:
     runs-on: ubuntu-latest
     needs: build_deploy
 
@@ -78,26 +77,42 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region:            ${{ env.AWS_REGION }}
 
-    - name: Install LibreOffice
+    - name: Install requirements for polling/conversion
       run: |
         sudo apt-get update
-        sudo apt-get install -y libreoffice
+        sudo apt-get install -y libreoffice python3-pandas python3-openpyxl
 
-    - name: Poll S3 until Acta_*.docx appear (max 5 min)
+    - name: Download latest Excel for count
       run: |
         mkdir -p actas
-        for i in {1..15}; do
-          echo "⏳ Attempt $i – syncing Acta_*.docx …"
+        aws s3 cp s3://projectplace-dv-2025-x9a7b/actas/Acta_de_Seguimiento.xlsx actas/Acta_de_Seguimiento.xlsx
+
+    - name: Count expected Acta (unique project_id in Excel)
+      id: count_acta
+      run: |
+        python3 -c "
+import pandas as pd
+df = pd.read_excel('actas/Acta_de_Seguimiento.xlsx')
+print(f'project_id values: {df[\"project_id\"].unique().tolist()}')
+print(f'ACTA_COUNT={df[\"project_id\"].nunique()}', end='')
+" > acta_count.txt
+        ACTA_COUNT=$(cat acta_count.txt | grep 'ACTA_COUNT=' | sed 's/ACTA_COUNT=//')
+        echo "ACTA_COUNT=$ACTA_COUNT" >> $GITHUB_ENV
+
+    - name: Poll S3 until all Acta_*.docx appear (max 7 min)
+      run: |
+        mkdir -p actas
+        for i in {1..21}; do
           aws s3 sync s3://projectplace-dv-2025-x9a7b/actas actas \
             --exclude "*" --include "Acta_*.docx" --delete
           COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l || true)
-          if [ "$COUNT" -gt 0 ]; then
-            echo "✅ $COUNT DOCX file(s) found."
+          if [ "$COUNT" -eq "$ACTA_COUNT" ]; then
+            echo "✅ $COUNT Acta DOCX files found."
             break
           fi
-          echo "🔄 Not yet. Sleeping 20 s …"
+          echo "🔄 Only $COUNT/$ACTA_COUNT found. Sleeping 20s..."
           sleep 20
-          [ "$i" -eq 15 ] && { echo "❌ Timeout (5 min)"; exit 1; }
+          [ "$i" -eq 21 ] && { echo "❌ Timeout (7 min): Not all Acta present"; exit 1; }
         done
 
     - name: Convert each DOCX ⇒ PDF

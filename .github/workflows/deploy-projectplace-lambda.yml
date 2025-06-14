@@ -87,17 +87,17 @@ jobs:
       - name: Poll S3 for available Acta DOCX (max 7 min)
         run: |
           mkdir -p actas
-          for i in {1..21}; do
-            aws s3 sync s3://${{ env.S3_BUCKET }}/actas actas --exclude "*" --include "Acta_*.docx" --delete
-            COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l || true)
-            if [ "$COUNT" -gt 0 ]; then
-              echo "✅ $COUNT Acta DOCX files found."
-              break
-            fi
-            echo "🔄 None found yet. Sleeping 20s..."
-            sleep 20
-            [ "$i" -eq 21 ] && { echo "❌ Timeout (7 min): No Acta present"; exit 1; }
-          done
+            for i in {1..21}; do
+              aws s3 sync s3://${{ env.S3_BUCKET }}/actas actas --exclude "*" --include "Acta_*.docx" --delete
+              COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l || true)
+              if [ "$COUNT" -eq "${{ env.ACTA_COUNT }}" ]; then
+                echo "✅ $COUNT Acta DOCX files found (all expected)."
+                break
+              fi
+              echo "🔄 Only $COUNT/${{ env.ACTA_COUNT }} found. Sleeping 20s..."
+              sleep 20
+              [ "$i" -eq 21 ] && { echo "❌ Timeout (7 min): Not all Acta present"; exit 1; }
+            done
 
       - name: List found Acta DOCX
         run: |

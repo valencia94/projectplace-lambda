@@ -1,60 +1,61 @@
-name: Build & Deploy Lambda Container (Latest)
+name: Single Project Acta Creator
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'Dockerfile'
-      - 'requirements.txt'
-      - 'lambda_handler.py'
-      - 'logo/**'
-      - '.github/workflows/deploy-lambda.yml'
   workflow_dispatch:
+    inputs:
+      project_id:
+        description: 'ProjectPlace Project ID'
+        required: true
+        type: string
 
 env:
   AWS_REGION: us-east-2
   ECR_REPOSITORY: 703671891952.dkr.ecr.us-east-2.amazonaws.com/projectplace-lambda
   LAMBDA_FUNCTION_NAME: ProjectPlaceDataExtractor
-  S3_BUCKET: projectplace-dv-2025-x9a7b 
+  S3_BUCKET: projectplace-dv-2025-x9a7b
 
 jobs:
   build_deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region:            ${{ env.AWS_REGION }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
 
-    - name: Login to Amazon ECR
-      uses: aws-actions/amazon-ecr-login@v1
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v1
 
-    - name: Build & push Docker image (always latest, always no-cache)
-      run: |
-        docker build --no-cache -t $ECR_REPOSITORY:latest .
-        docker push $ECR_REPOSITORY:latest
+      - name: Build & push Docker image (always latest, always no-cache)
+        run: |
+          docker build --no-cache -t $ECR_REPOSITORY:latest .
+          docker push $ECR_REPOSITORY:latest
 
-    - name: Update Lambda to latest image
-      run: |
-        aws lambda update-function-code \
-          --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
-          --image-uri "${{ env.ECR_REPOSITORY }}:latest" \
-          --region "${{ env.AWS_REGION }}"
+      - name: Update Lambda to latest image
+        run: |
+          aws lambda update-function-code \
+            --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
+            --image-uri "${{ env.ECR_REPOSITORY }}:latest" \
+            --region "${{ env.AWS_REGION }}"
 
-    - name: Invoke Lambda (async, fire-and-forget)
-      run: |
-        aws lambda invoke \
-          --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
-          --invocation-type Event \
-          --payload '{}' output.json \
-          --region "${{ env.AWS_REGION }}"
-        echo "Lambda triggered (async)"
+      - name: Invoke Lambda for single project
+        env:
+          PROJECT_ID: ${{ github.event.inputs.project_id }}
+        run: |
+          PAYLOAD="{\"project_id\": \"${PROJECT_ID}\"}"
+          echo "Invoking Lambda for project_id=$PROJECT_ID"
+          aws lambda invoke \
+            --function-name "${{ env.LAMBDA_FUNCTION_NAME }}" \
+            --invocation-type Event \
+            --payload "$PAYLOAD" output.json \
+            --region "${{ env.AWS_REGION }}"
+          echo "Lambda triggered (async) for project $PROJECT_ID"
 
   poll_and_convert:
     runs-on: ubuntu-latest
@@ -73,42 +74,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libreoffice python3-pandas python3-openpyxl
 
-      - name: Download latest Excel for count
+      - name: Download target DOCX from S3 (poll for availability)
+        env:
+          PROJECT_ID: ${{ github.event.inputs.project_id }}
         run: |
           mkdir -p actas
-          aws s3 cp s3://${{ env.S3_BUCKET }}/actas/Acta_de_Seguimiento.xlsx actas/Acta_de_Seguimiento.xlsx
-
-      - name: Count expected Acta (unique project_id in Excel)
-        id: count_acta
-        run: |
-          ACTA_COUNT=$(python3 -c "import pandas as pd; df = pd.read_excel('actas/Acta_de_Seguimiento.xlsx'); print(df['project_id'].nunique())")
-          echo "ACTA_COUNT=$ACTA_COUNT" >> $GITHUB_ENV
-          echo "Expected Acta count: $ACTA_COUNT"
-
-      - name: Poll S3 for available Acta DOCX (max 7 min)
-        run: |
-          mkdir -p actas
-            for i in {1..21}; do
-              aws s3 sync s3://${{ env.S3_BUCKET }}/actas actas --exclude "*" --include "Acta_*.docx" --delete
-              COUNT=$(ls -1 actas/Acta_*.docx 2>/dev/null | wc -l || true)
-              if [ "$COUNT" -gt 0 ]; then
-                if [ "$COUNT" -lt "$ACTA_COUNT" ]; then
-                  echo "⚠️ Only $COUNT of $ACTA_COUNT DOCX found; proceeding anyway."
-                else
-                  echo "✅ All $COUNT Acta DOCX files found."
-                fi
-                break
-              fi
-              echo "🔄 None found yet. Sleeping 20s..."
-              sleep 20
-              [ "$i" -eq 21 ] && { echo "❌ Timeout (7 min): No Acta present"; exit 1; }
-            done
+          SAFE_ID=${PROJECT_ID//\//_}
+          for i in {1..21}; do
+            aws s3 cp s3://${{ env.S3_BUCKET }}/actas/Acta_*_${SAFE_ID}.docx actas/ || true
+            FILES=$(ls -1 actas/Acta_*_${SAFE_ID}.docx 2>/dev/null | wc -l || true)
+            if [ "$FILES" -gt 0 ]; then
+              echo "✅ Acta DOCX file found for project $PROJECT_ID."
+              break
+            fi
+            echo "🔄 Not found yet. Sleeping 20s..."
+            sleep 20
+            [ "$i" -eq 21 ] && { echo "❌ Timeout (7 min): No Acta DOCX for $PROJECT_ID"; exit 1; }
+          done
 
       - name: List found Acta DOCX
         run: |
           ls -l actas/Acta_*.docx || echo "No Acta files found"
 
-      - name: Convert each DOCX ⇒ PDF
+      - name: Convert DOCX to PDF
         run: |
           cd actas
           for f in Acta_*.docx; do
@@ -116,7 +104,7 @@ jobs:
           done
           echo "✅ Conversion finished."
 
-      - name: Upload PDFs back to S3
+      - name: Upload PDF back to S3
         run: |
           aws s3 sync actas s3://${{ env.S3_BUCKET }}/actas \
             --exclude "*" --include "Acta_*.pdf" \

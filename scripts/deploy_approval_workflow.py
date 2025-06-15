@@ -97,12 +97,13 @@ def connect_get(api_id, res_id, arn):
     )
 
 def main():
-    ez = make_zip("approval/sendApprovalEmail.py",      "sendApprovalEmail")
+    # zip the email Lambda source (actual file uses snake_case)
+    ez = make_zip("approval/send_approval_email.py",      "sendApprovalEmail")
     cz = make_zip("approval/handleApprovalCallback.py", "handleApprovalCallback")
 
     email_arn = upsert_lambda(
         "sendApprovalEmail",
-        "sendApprovalEmail.lambda_handler",
+        "send_approval_email.lambda_handler",
         ez
     )
 

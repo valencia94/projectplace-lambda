@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Acta Approval Backend (MVP)
+
+Globals:
+  Function:
+    Runtime: python3.11        # or nodejs18.x
+    Timeout: 15
+    MemorySize: 256
+    Tracing: Active
+
+Resources:
+  ActaApprovalFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: acta-approval-backend
+      Handler: src/handler.lambda_handler  # update if Node
+      CodeUri: ../                       # root of repo
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail          # example extra perm
+              Resource: '*'
+      Events:
+        Approve:
+          Type: Api
+          Properties:
+            Path: /approve
+            Method: get
+            RestApiId: !Ref ApprovalApi
+            Cors: "'*'"
+        GenerateDoc:
+          Type: Api
+          Properties:
+            Path: /generateDocument
+            Method: post
+            RestApiId: !Ref ApprovalApi
+            Cors: "'*'"
+
+  ApprovalApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: acta-approval-api
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowOrigin: "'*'"
+
+Outputs:
+  ApiEndpoint:
+    Description: Invoke URL
+    Value: !Sub "https://${ApprovalApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
